@@ -83,6 +83,17 @@ if 'yara_rules' not in st.session_state:
 if 'yara_matches' not in st.session_state:
     st.session_state.yara_matches = []
 
+def get_udm_event_mapping():
+    """Get UDM/ECS mapping for event types"""
+    return {
+        'nmap_scan': {'category': 'network', 'type': 'info', 'kind': 'event', 'outcome': None},
+        'ssh_login': {'category': 'authentication', 'type': 'start', 'kind': 'event', 'outcome': None},
+        'failed_login': {'category': 'authentication', 'type': 'start', 'kind': 'event', 'outcome': 'failure'},
+        'port_scan': {'category': 'network', 'type': 'connection', 'kind': 'event', 'outcome': None},
+        'file_access': {'category': 'file', 'type': 'access', 'kind': 'event', 'outcome': None},
+        'process_creation': {'category': 'process', 'type': 'start', 'kind': 'event', 'outcome': 'success'}
+    }
+
 def connect_to_elastic(cloud_id, api_key):
     """Connect to Elastic Cloud"""
     try:
@@ -298,24 +309,57 @@ def get_sample_yara_rules() -> List[Dict[str, str]]:
     ]
 
 def generate_sample_events(count=100):
-    """Generate sample security events for demonstration"""
+    """Generate sample security events in UDM/ECS format for demonstration"""
     events = []
     event_types = ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
     severities = ['low', 'medium', 'high', 'critical']
     source_ips = ['192.168.1.100', '192.168.1.101', '10.0.0.5', '172.16.0.10', '203.0.113.5']
     
+    # Get UDM/ECS mapping
+    event_mapping = get_udm_event_mapping()
+    
     for i in range(count):
         timestamp = datetime.now() - timedelta(minutes=random.randint(0, 1440))
+        event_type = random.choice(event_types)
+        event_meta = event_mapping[event_type]
+        # Use predetermined outcome if specified, otherwise random
+        outcome = event_meta['outcome'] if event_meta['outcome'] else random.choice(['success', 'failure'])
+        severity = random.choice(severities)
+        src_ip = random.choice(source_ips)
+        
+        # UDM/ECS compliant event structure
         event = {
+            # Core timestamp
+            '@timestamp': timestamp.isoformat(),
             'timestamp': timestamp,
-            'event.action': random.choice(event_types),
-            'event.severity': random.choice(severities),
-            'source.ip': random.choice(source_ips),
+            
+            # Event categorization (UDM/ECS)
+            'event.kind': event_meta['kind'],
+            'event.category': event_meta['category'],
+            'event.type': event_meta['type'],
+            'event.action': event_type,
+            'event.outcome': outcome,
+            'event.severity': severity,
+            'event.dataset': 'blackstar.siem',
+            'event.module': 'blackstar',
+            
+            # Source information
+            'source.ip': src_ip,
+            'source.address': src_ip,
+            
+            # Destination information
             'destination.ip': '192.168.1.50',
+            'destination.address': '192.168.1.50',
             'destination.port': random.choice([22, 80, 443, 3389, 8080]),
+            
+            # User information
             'user.name': random.choice(['admin', 'user1', 'root', 'service_account']),
-            'event.outcome': random.choice(['success', 'failure']),
-            'message': f'Security event detected: {random.choice(event_types)}'
+            
+            # Additional metadata
+            'message': f'Security event detected: {event_type}',
+            'host.name': 'blackstar-siem-host',
+            'agent.type': 'blackstar-agent',
+            'agent.version': '1.0.0'
         }
         # Add UDM version
         event['udm'] = convert_to_udm(event)
@@ -432,20 +476,40 @@ def main():
             
             event_type = st.selectbox(
                 "Event Type",
-                ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access']
+                ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
             )
             
             if st.button("Simulate Event"):
+                # Get UDM/ECS mapping
+                event_mapping = get_udm_event_mapping()
+                event_meta = event_mapping.get(event_type, {'category': 'network', 'type': 'info', 'kind': 'event', 'outcome': None})
+                timestamp = datetime.now()
+                severity = random.choice(['low', 'medium', 'high', 'critical'])
+                # Use predetermined outcome if specified, otherwise use 'success'
+                outcome = event_meta['outcome'] if event_meta['outcome'] else 'success'
+                
+                # UDM/ECS compliant simulated event
                 new_event = {
-                    'timestamp': datetime.now(),
+                    '@timestamp': timestamp.isoformat(),
+                    'timestamp': timestamp,
+                    'event.kind': event_meta['kind'],
+                    'event.category': event_meta['category'],
+                    'event.type': event_meta['type'],
                     'event.action': event_type,
-                    'event.severity': random.choice(['low', 'medium', 'high', 'critical']),
+                    'event.severity': severity,
+                    'event.outcome': outcome,
+                    'event.dataset': 'blackstar.siem',
+                    'event.module': 'blackstar',
                     'source.ip': '192.168.1.100',
+                    'source.address': '192.168.1.100',
                     'destination.ip': '192.168.1.50',
+                    'destination.address': '192.168.1.50',
                     'destination.port': 22 if 'ssh' in event_type else 80,
                     'user.name': 'simulated_user',
-                    'event.outcome': 'success',
-                    'message': f'Simulated {event_type} event'
+                    'message': f'Simulated {event_type} event',
+                    'host.name': 'blackstar-siem-host',
+                    'agent.type': 'blackstar-agent',
+                    'agent.version': '1.0.0'
                 }
                 # Add UDM version
                 new_event['udm'] = convert_to_udm(new_event)
@@ -694,7 +758,7 @@ def main():
                 with col_a:
                     alert_event_type = st.selectbox(
                         "Event Type to Monitor",
-                        ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access']
+                        ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
                     )
                 
                 with col_b:
