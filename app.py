@@ -11,7 +11,6 @@ import plotly.graph_objects as go
 from elasticsearch import Elasticsearch
 import random
 import json
-import re
 
 # Constants
 MAX_YARAL_MATCHES_DISPLAY = 50
