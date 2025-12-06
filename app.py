@@ -68,6 +68,17 @@ if 'simulated_events' not in st.session_state:
 if 'alerts' not in st.session_state:
     st.session_state.alerts = []
 
+def get_udm_event_mapping():
+    """Get UDM/ECS mapping for event types"""
+    return {
+        'nmap_scan': {'category': 'network', 'type': 'info', 'kind': 'event'},
+        'ssh_login': {'category': 'authentication', 'type': 'start', 'kind': 'event'},
+        'failed_login': {'category': 'authentication', 'type': 'start', 'kind': 'event'},
+        'port_scan': {'category': 'network', 'type': 'connection', 'kind': 'event'},
+        'file_access': {'category': 'file', 'type': 'access', 'kind': 'event'},
+        'process_creation': {'category': 'process', 'type': 'start', 'kind': 'event'}
+    }
+
 def connect_to_elastic(cloud_id, api_key):
     """Connect to Elastic Cloud"""
     try:
@@ -86,24 +97,56 @@ def connect_to_elastic(cloud_id, api_key):
         return False, f"Connection error: {str(e)}"
 
 def generate_sample_events(count=100):
-    """Generate sample security events for demonstration"""
+    """Generate sample security events in UDM/ECS format for demonstration"""
     events = []
     event_types = ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
     severities = ['low', 'medium', 'high', 'critical']
     source_ips = ['192.168.1.100', '192.168.1.101', '10.0.0.5', '172.16.0.10', '203.0.113.5']
     
+    # Get UDM/ECS mapping
+    event_mapping = get_udm_event_mapping()
+    
     for i in range(count):
         timestamp = datetime.now() - timedelta(minutes=random.randint(0, 1440))
+        event_type = random.choice(event_types)
+        event_meta = event_mapping[event_type]
+        outcome = random.choice(['success', 'failure'])
+        severity = random.choice(severities)
+        src_ip = random.choice(source_ips)
+        
+        # UDM/ECS compliant event structure
         event = {
+            # Core timestamp
+            '@timestamp': timestamp.isoformat(),
             'timestamp': timestamp,
-            'event.action': random.choice(event_types),
-            'event.severity': random.choice(severities),
-            'source.ip': random.choice(source_ips),
+            
+            # Event categorization (UDM/ECS)
+            'event.kind': event_meta['kind'],
+            'event.category': event_meta['category'],
+            'event.type': event_meta['type'],
+            'event.action': event_type,
+            'event.outcome': outcome,
+            'event.severity': severity,
+            'event.dataset': 'blackstar.siem',
+            'event.module': 'blackstar',
+            
+            # Source information
+            'source.ip': src_ip,
+            'source.address': src_ip,
+            
+            # Destination information
             'destination.ip': '192.168.1.50',
+            'destination.address': '192.168.1.50',
             'destination.port': random.choice([22, 80, 443, 3389, 8080]),
+            
+            # User information
             'user.name': random.choice(['admin', 'user1', 'root', 'service_account']),
-            'event.outcome': random.choice(['success', 'failure']),
-            'message': f'Security event detected: {random.choice(event_types)}'
+            
+            # Additional metadata
+            'message': f'Security event detected: {event_type}',
+            'host.name': 'blackstar-siem-host',
+            'agent.type': 'blackstar-agent',
+            'agent.version': '1.0.0'
         }
         events.append(event)
     
@@ -218,20 +261,38 @@ def main():
             
             event_type = st.selectbox(
                 "Event Type",
-                ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access']
+                ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
             )
             
             if st.button("Simulate Event"):
+                # Get UDM/ECS mapping
+                event_mapping = get_udm_event_mapping()
+                event_meta = event_mapping.get(event_type, {'category': 'network', 'type': 'info', 'kind': 'event'})
+                timestamp = datetime.now()
+                severity = random.choice(['low', 'medium', 'high', 'critical'])
+                
+                # UDM/ECS compliant simulated event
                 new_event = {
-                    'timestamp': datetime.now(),
+                    '@timestamp': timestamp.isoformat(),
+                    'timestamp': timestamp,
+                    'event.kind': event_meta['kind'],
+                    'event.category': event_meta['category'],
+                    'event.type': event_meta['type'],
                     'event.action': event_type,
-                    'event.severity': random.choice(['low', 'medium', 'high', 'critical']),
+                    'event.severity': severity,
+                    'event.outcome': 'success',
+                    'event.dataset': 'blackstar.siem',
+                    'event.module': 'blackstar',
                     'source.ip': '192.168.1.100',
+                    'source.address': '192.168.1.100',
                     'destination.ip': '192.168.1.50',
+                    'destination.address': '192.168.1.50',
                     'destination.port': 22 if 'ssh' in event_type else 80,
                     'user.name': 'simulated_user',
-                    'event.outcome': 'success',
-                    'message': f'Simulated {event_type} event'
+                    'message': f'Simulated {event_type} event',
+                    'host.name': 'blackstar-siem-host',
+                    'agent.type': 'blackstar-agent',
+                    'agent.version': '1.0.0'
                 }
                 st.session_state.simulated_events.append(new_event)
                 st.success(f"Simulated {event_type} event!")
@@ -439,7 +500,7 @@ def main():
                 with col_a:
                     alert_event_type = st.selectbox(
                         "Event Type to Monitor",
-                        ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access']
+                        ['nmap_scan', 'ssh_login', 'failed_login', 'port_scan', 'file_access', 'process_creation']
                     )
                 
                 with col_b:
