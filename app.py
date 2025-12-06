@@ -134,12 +134,12 @@ def connect_to_elastic(cloud_id, api_key):
         elif 'ssl' in error_message or 'certificate' in error_message or 'verify' in error_message:
             return False, (
                 "❌ SSL Certificate Verification Failed\n\n"
-                "Cannot verify the SSL certificate of your Elastic Cloud deployment.\n\n"
+                "SSL certificate verification is enabled for security. The connection failed because the certificate could not be verified.\n\n"
                 "✅ Steps to fix:\n"
                 "1. Check your internet connection\n"
-                "2. Ensure you're not behind a proxy blocking SSL\n"
-                "3. Verify your system certificates are up to date\n"
-                "4. Contact your network administrator if behind corporate firewall\n\n"
+                "2. Verify system certificates are up to date\n"
+                "3. If behind a corporate proxy, contact your network administrator\n"
+                "4. Ensure the Cloud ID is correct and the deployment is accessible\n\n"
                 f"Technical details: {str(e)}"
             )
         
