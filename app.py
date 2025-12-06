@@ -148,23 +148,38 @@ def match_yaral_rule(event, rule):
 
 def apply_yaral_rules(events, rules):
     """
-    Apply YARAL rules to events and return matches
+    Apply YARAL rules to events and return deduplicated matches.
+    Each event appears only once, with aggregated rule metadata if multiple rules match.
     """
-    matches = []
+    event_matches = {}
     
     for event in events:
+        matched_rules = []
         for rule in rules:
             if match_yaral_rule(event, rule):
-                match = {
+                matched_rules.append({
+                    'name': rule['name'],
+                    'description': rule['description'],
+                    'severity': rule['severity']
+                })
+        if matched_rules:
+            # Use a hashable representation of the event as key
+            event_key = json.dumps(event, sort_keys=True)
+            if event_key not in event_matches:
+                event_matches[event_key] = {
                     'event': event,
-                    'rule_name': rule['name'],
-                    'rule_description': rule['description'],
-                    'rule_severity': rule['severity'],
+                    'rule_names': [],
+                    'rule_descriptions': [],
+                    'rule_severities': [],
                     'timestamp': event.get('timestamp', datetime.now())
                 }
-                matches.append(match)
+            for rule_info in matched_rules:
+                event_matches[event_key]['rule_names'].append(rule_info['name'])
+                event_matches[event_key]['rule_descriptions'].append(rule_info['description'])
+                event_matches[event_key]['rule_severities'].append(rule_info['severity'])
     
-    return matches
+    # Return list of deduplicated matches
+    return list(event_matches.values())
 
 
 def connect_to_elastic(cloud_id, api_key):
