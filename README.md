@@ -25,6 +25,7 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 - Comprehensive event log display
 - Advanced filtering capabilities (severity, type, outcome)
 - Export events to CSV
+- **Export events to UDM (Unified Data Model) JSON format**
 - Real-time event updates
 - Detailed event information
 
@@ -41,6 +42,14 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 - Threshold configuration
 - Alert monitoring and notifications
 - Rule management interface
+
+### 🔍 YARAL Detection Rules
+- **YARAL (YARA-Like) pattern-based detection**
+- Pre-configured security detection rules
+- Real-time event matching
+- Rule enable/disable toggle
+- Export detection matches
+- Custom rule conditions
 
 ### 🎯 Event Simulation
 - Generate test security events
@@ -137,6 +146,8 @@ BlackStarSIEM/
 - **Plotly** - Interactive visualizations
 - **Elasticsearch** - Search and analytics engine
 - **Python** - Programming language
+- **UDM (Unified Data Model)** - Google Chronicle's standardized security event format
+- **YARAL** - YARA-like pattern matching for security event detection
 
 ## 📚 Learning Resources
 

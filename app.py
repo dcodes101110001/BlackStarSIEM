@@ -13,6 +13,9 @@ import random
 import json
 import re
 
+# Constants
+MAX_YARAL_MATCHES_DISPLAY = 50
+
 # Page configuration
 st.set_page_config(
     page_title="BlackStar SIEM Lab",
@@ -188,10 +191,37 @@ def parse_to_udm(event):
     Parse event data into UDM (Unified Data Model) format
     UDM is Google Chronicle's standardized format for security events
     """
+    # Helper function to format timestamp
+    def format_timestamp(timestamp):
+        if isinstance(timestamp, datetime):
+            return timestamp.isoformat()
+        return str(timestamp) if timestamp else datetime.now().isoformat()
+    
+    # Map event actions to UDM event types
+    event_type_mapping = {
+        'nmap_scan': 'NETWORK_CONNECTION',
+        'port_scan': 'NETWORK_CONNECTION',
+        'ssh_login': 'USER_LOGIN',
+        'failed_login': 'USER_LOGIN',
+        'file_access': 'FILE_READ',
+        'process_creation': 'PROCESS_LAUNCH'
+    }
+    
+    event_action = event.get('event.action', '')
+    event_type = event_type_mapping.get(event_action, 'GENERIC_EVENT')
+    
+    # Map severity to UDM severity levels
+    severity_mapping = {
+        'low': 'LOW',
+        'medium': 'MEDIUM', 
+        'high': 'HIGH',
+        'critical': 'CRITICAL'
+    }
+    
     udm_event = {
         'metadata': {
-            'event_timestamp': event.get('timestamp', datetime.now()).isoformat() if isinstance(event.get('timestamp'), datetime) else str(event.get('timestamp', '')),
-            'event_type': 'NETWORK_CONNECTION' if 'scan' in event.get('event.action', '') or 'port' in event.get('event.action', '') else 'USER_LOGIN',
+            'event_timestamp': format_timestamp(event.get('timestamp')),
+            'event_type': event_type,
             'product_name': 'BlackStar SIEM',
             'vendor_name': 'BlackStar',
             'product_version': '1.0',
@@ -207,25 +237,14 @@ def parse_to_udm(event):
             'port': event.get('destination.port', 0),
         },
         'security_result': {
-            'action': event.get('event.action', ''),
-            'severity': event.get('event.severity', 'UNKNOWN_SEVERITY').upper(),
+            'action': event_action,
+            'severity': severity_mapping.get(event.get('event.severity', '').lower(), 'UNKNOWN_SEVERITY'),
             'description': event.get('message', ''),
         },
         'network': {
             'direction': 'OUTBOUND',
         }
     }
-    
-    # Map severity to UDM severity levels
-    severity_mapping = {
-        'low': 'LOW',
-        'medium': 'MEDIUM', 
-        'high': 'HIGH',
-        'critical': 'CRITICAL'
-    }
-    udm_event['security_result']['severity'] = severity_mapping.get(
-        event.get('event.severity', '').lower(), 'UNKNOWN_SEVERITY'
-    )
     
     return udm_event
 
@@ -682,6 +701,9 @@ def main():
             if not st.session_state.yaral_rules:
                 st.session_state.yaral_rules = load_yaral_rules()
             
+            # Convert DataFrame to dict once for efficiency
+            events_list = events_df.to_dict('records') if not events_df.empty else []
+            
             col1, col2 = st.columns([2, 1])
             
             with col1:
@@ -703,7 +725,7 @@ def main():
                                 st.code(conditions_str, language='json')
                                 
                                 # Apply rule to current events
-                                matching_events = [e for e in events_df.to_dict('records') if match_yaral_rule(e, rule)]
+                                matching_events = [e for e in events_list if match_yaral_rule(e, rule)]
                                 
                                 if matching_events:
                                     st.warning(f"⚠️ {len(matching_events)} events match this rule")
@@ -730,8 +752,8 @@ def main():
                 st.metric("Enabled Rules", enabled_rules)
                 
                 # Apply all rules and show matches
-                if st.session_state.yaral_rules and not events_df.empty:
-                    all_matches = apply_yaral_rules(events_df.to_dict('records'), st.session_state.yaral_rules)
+                if st.session_state.yaral_rules and events_list:
+                    all_matches = apply_yaral_rules(events_list, st.session_state.yaral_rules)
                     st.metric("Total Matches", len(all_matches))
                 
                 st.divider()
@@ -747,16 +769,16 @@ def main():
                     st.rerun()
             
             # Show recent matches
-            if st.session_state.yaral_rules and not events_df.empty:
+            if st.session_state.yaral_rules and events_list:
                 st.divider()
                 st.subheader("Recent YARAL Matches")
                 
-                all_matches = apply_yaral_rules(events_df.to_dict('records'), st.session_state.yaral_rules)
+                all_matches = apply_yaral_rules(events_list, st.session_state.yaral_rules)
                 
                 if all_matches:
                     # Convert to DataFrame for display
                     matches_data = []
-                    for match in all_matches[:50]:  # Show last 50 matches
+                    for match in all_matches[:MAX_YARAL_MATCHES_DISPLAY]:
                         matches_data.append({
                             'Timestamp': match['timestamp'],
                             'Rule': match['rule_name'],
