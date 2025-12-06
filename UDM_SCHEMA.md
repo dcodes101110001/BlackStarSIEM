@@ -49,34 +49,40 @@ BlackStar SIEM now implements the Unified Data Model (UDM) based on Elastic Comm
   - category: `network`
   - type: `info`
   - kind: `event`
+  - outcome: random (success/failure)
 
 - **port_scan**
   - category: `network`
   - type: `connection`
   - kind: `event`
+  - outcome: random (success/failure)
 
 ### Authentication Events
 - **ssh_login**
   - category: `authentication`
   - type: `start`
   - kind: `event`
+  - outcome: random (success/failure)
 
 - **failed_login**
   - category: `authentication`
-  - type: `start`
+  - type: `end`
   - kind: `event`
+  - outcome: `failure` (predetermined)
 
 ### File Events
 - **file_access**
   - category: `file`
   - type: `access`
   - kind: `event`
+  - outcome: random (success/failure)
 
 ### Process Events
 - **process_creation**
   - category: `process`
   - type: `start`
   - kind: `event`
+  - outcome: `success` (predetermined)
 
 ## Example Event Structure
 

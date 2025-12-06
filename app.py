@@ -71,12 +71,12 @@ if 'alerts' not in st.session_state:
 def get_udm_event_mapping():
     """Get UDM/ECS mapping for event types"""
     return {
-        'nmap_scan': {'category': 'network', 'type': 'info', 'kind': 'event'},
-        'ssh_login': {'category': 'authentication', 'type': 'start', 'kind': 'event'},
-        'failed_login': {'category': 'authentication', 'type': 'start', 'kind': 'event'},
-        'port_scan': {'category': 'network', 'type': 'connection', 'kind': 'event'},
-        'file_access': {'category': 'file', 'type': 'access', 'kind': 'event'},
-        'process_creation': {'category': 'process', 'type': 'start', 'kind': 'event'}
+        'nmap_scan': {'category': 'network', 'type': 'info', 'kind': 'event', 'outcome': None},
+        'ssh_login': {'category': 'authentication', 'type': 'start', 'kind': 'event', 'outcome': None},
+        'failed_login': {'category': 'authentication', 'type': 'end', 'kind': 'event', 'outcome': 'failure'},
+        'port_scan': {'category': 'network', 'type': 'connection', 'kind': 'event', 'outcome': None},
+        'file_access': {'category': 'file', 'type': 'access', 'kind': 'event', 'outcome': None},
+        'process_creation': {'category': 'process', 'type': 'start', 'kind': 'event', 'outcome': 'success'}
     }
 
 def connect_to_elastic(cloud_id, api_key):
@@ -110,7 +110,8 @@ def generate_sample_events(count=100):
         timestamp = datetime.now() - timedelta(minutes=random.randint(0, 1440))
         event_type = random.choice(event_types)
         event_meta = event_mapping[event_type]
-        outcome = random.choice(['success', 'failure'])
+        # Use predetermined outcome if specified, otherwise random
+        outcome = event_meta['outcome'] if event_meta['outcome'] else random.choice(['success', 'failure'])
         severity = random.choice(severities)
         src_ip = random.choice(source_ips)
         
@@ -267,9 +268,11 @@ def main():
             if st.button("Simulate Event"):
                 # Get UDM/ECS mapping
                 event_mapping = get_udm_event_mapping()
-                event_meta = event_mapping.get(event_type, {'category': 'network', 'type': 'info', 'kind': 'event'})
+                event_meta = event_mapping.get(event_type, {'category': 'network', 'type': 'info', 'kind': 'event', 'outcome': None})
                 timestamp = datetime.now()
                 severity = random.choice(['low', 'medium', 'high', 'critical'])
+                # Use predetermined outcome if specified, otherwise use 'success'
+                outcome = event_meta['outcome'] if event_meta['outcome'] else 'success'
                 
                 # UDM/ECS compliant simulated event
                 new_event = {
@@ -280,7 +283,7 @@ def main():
                     'event.type': event_meta['type'],
                     'event.action': event_type,
                     'event.severity': severity,
-                    'event.outcome': 'success',
+                    'event.outcome': outcome,
                     'event.dataset': 'blackstar.siem',
                     'event.module': 'blackstar',
                     'source.ip': '192.168.1.100',
