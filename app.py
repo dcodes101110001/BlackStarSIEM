@@ -95,14 +95,15 @@ def get_udm_event_mapping():
     }
 
 def connect_to_elastic(cloud_id, api_key):
-    """Connect to Elastic Cloud"""
+    """Connect to Elastic Cloud with comprehensive error handling"""
     try:
         es = Elasticsearch(
             cloud_id=cloud_id,
             api_key=api_key,
             request_timeout=30,
             retry_on_timeout=True,
-            max_retries=3
+            max_retries=3,
+            verify_certs=True  # Enable SSL certificate verification
         )
         # Test connection with info() call instead of ping()
         # ping() may not work with API keys in some configurations
@@ -114,7 +115,73 @@ def connect_to_elastic(cloud_id, api_key):
         else:
             return False, "Failed to connect to Elastic Cloud"
     except Exception as e:
-        return False, f"Connection error: {str(e)}"
+        # Provide detailed, actionable error messages
+        error_message = str(e).lower()
+        
+        # Authentication errors
+        if 'unauthorized' in error_message or 'authentication' in error_message or '401' in error_message:
+            return False, (
+                "❌ Authentication Failed\n\n"
+                "Your API key or Cloud ID is invalid.\n\n"
+                "✅ Steps to fix:\n"
+                "1. Verify your API key is active in Elastic Cloud\n"
+                "2. Ensure the API key has proper permissions\n"
+                "3. Check that the Cloud ID matches your deployment\n"
+                "4. Try generating a new API key"
+            )
+        
+        # SSL/Certificate errors
+        elif 'ssl' in error_message or 'certificate' in error_message or 'verify' in error_message:
+            return False, (
+                "❌ SSL Certificate Verification Failed\n\n"
+                "Cannot verify the SSL certificate of your Elastic Cloud deployment.\n\n"
+                "✅ Steps to fix:\n"
+                "1. Check your internet connection\n"
+                "2. Ensure you're not behind a proxy blocking SSL\n"
+                "3. Verify your system certificates are up to date\n"
+                "4. Contact your network administrator if behind corporate firewall\n\n"
+                f"Technical details: {str(e)}"
+            )
+        
+        # Connection/Network errors
+        elif 'timeout' in error_message or 'connection' in error_message or 'network' in error_message:
+            return False, (
+                "❌ Connection Timeout\n\n"
+                "Cannot reach your Elastic Cloud deployment.\n\n"
+                "✅ Steps to fix:\n"
+                "1. Check your internet connection\n"
+                "2. Verify the Cloud ID is correct\n"
+                "3. Ensure Elastic Cloud is not experiencing outages\n"
+                "4. Check if you're behind a firewall blocking the connection\n"
+                "5. Try again in a few moments\n\n"
+                f"Technical details: {str(e)}"
+            )
+        
+        # Cloud ID format errors
+        elif 'cloud_id' in error_message or 'base64' in error_message:
+            return False, (
+                "❌ Invalid Cloud ID Format\n\n"
+                "The Cloud ID you provided appears to be malformed.\n\n"
+                "✅ Steps to fix:\n"
+                "1. Copy the Cloud ID directly from Elastic Cloud console\n"
+                "2. Ensure there are no extra spaces or characters\n"
+                "3. Cloud ID should look like: 'deployment-name:base64string'\n\n"
+                f"Technical details: {str(e)}"
+            )
+        
+        # Generic error with helpful context
+        else:
+            return False, (
+                f"❌ Connection Error\n\n"
+                f"An unexpected error occurred while connecting to Elastic Cloud.\n\n"
+                f"Error details: {str(e)}\n\n"
+                "✅ General troubleshooting:\n"
+                "1. Verify your Cloud ID and API key are correct\n"
+                "2. Check your network connection\n"
+                "3. Ensure Elastic Cloud deployment is running\n"
+                "4. Try using Demo Mode to test the application\n"
+                "5. Check Elastic Cloud status page for outages"
+            )
 
 def convert_to_udm(event: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -968,6 +1035,26 @@ def main():
                                     if st.button("▶️ Enable", key=f"enable_yara_{idx}"):
                                         st.session_state.yara_rules[idx]['enabled'] = True
                                         st.rerun()
+                    
+                    # Export YARA rules
+                    st.divider()
+                    if st.button("📥 Export All YARA Rules"):
+                        rules_export = []
+                        for rule in st.session_state.yara_rules:
+                            rules_export.append({
+                                'name': rule['name'],
+                                'description': rule['description'],
+                                'content': rule['content'],
+                                'enabled': rule['enabled'],
+                                'created_at': rule['created_at'].isoformat()
+                            })
+                        rules_json = json.dumps(rules_export, indent=2)
+                        st.download_button(
+                            label="Download YARA Rules JSON",
+                            data=rules_json,
+                            file_name=f"yara_rules_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                        )
                 else:
                     st.info("No YARA rules configured. Load sample rules or add your own!")
                 
