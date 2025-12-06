@@ -10,6 +10,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from elasticsearch import Elasticsearch
 import random
+import json
+import re
 
 # Page configuration
 st.set_page_config(
@@ -67,6 +69,100 @@ if 'simulated_events' not in st.session_state:
     st.session_state.simulated_events = []
 if 'alerts' not in st.session_state:
     st.session_state.alerts = []
+if 'yaral_rules' not in st.session_state:
+    st.session_state.yaral_rules = []
+
+def load_yaral_rules():
+    """
+    Load YARAL (YARA-Like) rules for security event detection
+    YARAL rules are simplified pattern-matching rules for SIEM events
+    """
+    default_rules = [
+        {
+            'name': 'Suspicious_Nmap_Scan',
+            'description': 'Detects potential Nmap scanning activity',
+            'conditions': {
+                'event.action': 'nmap_scan',
+                'event.severity': ['medium', 'high', 'critical']
+            },
+            'severity': 'high',
+            'enabled': True
+        },
+        {
+            'name': 'Multiple_Failed_Logins',
+            'description': 'Detects multiple failed login attempts',
+            'conditions': {
+                'event.action': 'failed_login',
+                'event.outcome': 'failure'
+            },
+            'severity': 'medium',
+            'enabled': True
+        },
+        {
+            'name': 'Port_Scan_Detection',
+            'description': 'Detects port scanning activity',
+            'conditions': {
+                'event.action': 'port_scan'
+            },
+            'severity': 'high',
+            'enabled': True
+        },
+        {
+            'name': 'Unauthorized_File_Access',
+            'description': 'Detects unauthorized file access attempts',
+            'conditions': {
+                'event.action': 'file_access',
+                'event.outcome': 'failure'
+            },
+            'severity': 'medium',
+            'enabled': True
+        }
+    ]
+    return default_rules
+
+def match_yaral_rule(event, rule):
+    """
+    Check if an event matches a YARAL rule
+    """
+    if not rule.get('enabled', True):
+        return False
+    
+    conditions = rule.get('conditions', {})
+    
+    for key, value in conditions.items():
+        event_value = event.get(key)
+        
+        # Handle list of acceptable values
+        if isinstance(value, list):
+            if event_value not in value:
+                return False
+        # Handle single value
+        else:
+            if event_value != value:
+                return False
+    
+    return True
+
+def apply_yaral_rules(events, rules):
+    """
+    Apply YARAL rules to events and return matches
+    """
+    matches = []
+    
+    for event in events:
+        for rule in rules:
+            if match_yaral_rule(event, rule):
+                match = {
+                    'event': event,
+                    'rule_name': rule['name'],
+                    'rule_description': rule['description'],
+                    'rule_severity': rule['severity'],
+                    'timestamp': event.get('timestamp', datetime.now())
+                }
+                matches.append(match)
+    
+    return matches
+
 
 def connect_to_elastic(cloud_id, api_key):
     """Connect to Elastic Cloud"""
@@ -74,16 +170,64 @@ def connect_to_elastic(cloud_id, api_key):
         es = Elasticsearch(
             cloud_id=cloud_id,
             api_key=api_key,
-            request_timeout=30
+            request_timeout=30,
+            verify_certs=True
         )
-        if es.ping():
-            st.session_state.es_client = es
-            st.session_state.es_connected = True
-            return True, "Successfully connected to Elastic Cloud!"
-        else:
-            return False, "Failed to ping Elastic Cloud"
+        # Test connection with ping
+        if not es.ping():
+            return False, "Unable to connect to Elastic Cloud. Please verify your Cloud ID and API Key are correct."
+        
+        st.session_state.es_client = es
+        st.session_state.es_connected = True
+        return True, "Successfully connected to Elastic Cloud!"
     except Exception as e:
         return False, f"Connection error: {str(e)}"
+
+def parse_to_udm(event):
+    """
+    Parse event data into UDM (Unified Data Model) format
+    UDM is Google Chronicle's standardized format for security events
+    """
+    udm_event = {
+        'metadata': {
+            'event_timestamp': event.get('timestamp', datetime.now()).isoformat() if isinstance(event.get('timestamp'), datetime) else str(event.get('timestamp', '')),
+            'event_type': 'NETWORK_CONNECTION' if 'scan' in event.get('event.action', '') or 'port' in event.get('event.action', '') else 'USER_LOGIN',
+            'product_name': 'BlackStar SIEM',
+            'vendor_name': 'BlackStar',
+            'product_version': '1.0',
+        },
+        'principal': {
+            'ip': event.get('source.ip', ''),
+            'user': {
+                'userid': event.get('user.name', ''),
+            },
+        },
+        'target': {
+            'ip': event.get('destination.ip', ''),
+            'port': event.get('destination.port', 0),
+        },
+        'security_result': {
+            'action': event.get('event.action', ''),
+            'severity': event.get('event.severity', 'UNKNOWN_SEVERITY').upper(),
+            'description': event.get('message', ''),
+        },
+        'network': {
+            'direction': 'OUTBOUND',
+        }
+    }
+    
+    # Map severity to UDM severity levels
+    severity_mapping = {
+        'low': 'LOW',
+        'medium': 'MEDIUM', 
+        'high': 'HIGH',
+        'critical': 'CRITICAL'
+    }
+    udm_event['security_result']['severity'] = severity_mapping.get(
+        event.get('event.severity', '').lower(), 'UNKNOWN_SEVERITY'
+    )
+    
+    return udm_event
 
 def generate_sample_events(count=100):
     """Generate sample security events for demonstration"""
@@ -275,7 +419,7 @@ def main():
         
     else:
         # Main dashboard tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts", "🔍 YARAL Rules"])
         
         # Get events (from Elastic or simulated)
         if st.session_state.simulated_events:
@@ -365,15 +509,31 @@ def main():
                 height=500
             )
             
-            # Export option
-            if st.button("📥 Export to CSV"):
-                csv = filtered_df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name=f"siem_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
+            # Export options
+            col_export1, col_export2 = st.columns(2)
+            
+            with col_export1:
+                if st.button("📥 Export to CSV"):
+                    csv = filtered_df.to_csv(index=False)
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name=f"siem_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            
+            with col_export2:
+                if st.button("📥 Export to UDM JSON"):
+                    # Convert events to UDM format
+                    udm_events = [parse_to_udm(event) for event in filtered_df.to_dict('records')]
+                    udm_json = json.dumps(udm_events, indent=2, default=str)
+                    st.download_button(
+                        label="Download UDM JSON",
+                        data=udm_json,
+                        file_name=f"siem_events_udm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+
         
         with tab3:
             # Analytics
@@ -512,6 +672,114 @@ def main():
                                 st.rerun()
             else:
                 st.info("No alert rules configured yet. Create your first rule above!")
+        
+        with tab5:
+            # YARAL Rules management
+            st.header("YARAL Detection Rules")
+            st.markdown("**YARAL (YARA-Like)** rules provide pattern-based detection for security events")
+            
+            # Load default rules if not loaded
+            if not st.session_state.yaral_rules:
+                st.session_state.yaral_rules = load_yaral_rules()
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.subheader("Active YARAL Rules")
+                
+                if st.session_state.yaral_rules:
+                    for idx, rule in enumerate(st.session_state.yaral_rules):
+                        with st.expander(f"🔍 {rule['name']}", expanded=False):
+                            col_a, col_b = st.columns([3, 1])
+                            
+                            with col_a:
+                                st.write(f"**Description:** {rule['description']}")
+                                st.write(f"**Severity:** {rule['severity']}")
+                                st.write(f"**Status:** {'✅ Enabled' if rule.get('enabled', True) else '❌ Disabled'}")
+                                
+                                # Display conditions
+                                st.write("**Conditions:**")
+                                conditions_str = json.dumps(rule.get('conditions', {}), indent=2)
+                                st.code(conditions_str, language='json')
+                                
+                                # Apply rule to current events
+                                matching_events = [e for e in events_df.to_dict('records') if match_yaral_rule(e, rule)]
+                                
+                                if matching_events:
+                                    st.warning(f"⚠️ {len(matching_events)} events match this rule")
+                                else:
+                                    st.success("✅ No matching events")
+                            
+                            with col_b:
+                                # Toggle enable/disable
+                                current_state = rule.get('enabled', True)
+                                new_state = st.checkbox("Enabled", value=current_state, key=f"yaral_enable_{idx}")
+                                if new_state != current_state:
+                                    st.session_state.yaral_rules[idx]['enabled'] = new_state
+                                    st.rerun()
+                else:
+                    st.info("No YARAL rules loaded. Click 'Load Default Rules' to get started.")
+            
+            with col2:
+                st.subheader("Rule Statistics")
+                
+                total_rules = len(st.session_state.yaral_rules)
+                enabled_rules = sum(1 for r in st.session_state.yaral_rules if r.get('enabled', True))
+                
+                st.metric("Total Rules", total_rules)
+                st.metric("Enabled Rules", enabled_rules)
+                
+                # Apply all rules and show matches
+                if st.session_state.yaral_rules and not events_df.empty:
+                    all_matches = apply_yaral_rules(events_df.to_dict('records'), st.session_state.yaral_rules)
+                    st.metric("Total Matches", len(all_matches))
+                
+                st.divider()
+                
+                if st.button("🔄 Load Default Rules"):
+                    st.session_state.yaral_rules = load_yaral_rules()
+                    st.success("Default YARAL rules loaded!")
+                    st.rerun()
+                
+                if st.button("🗑️ Clear All Rules"):
+                    st.session_state.yaral_rules = []
+                    st.success("All rules cleared!")
+                    st.rerun()
+            
+            # Show recent matches
+            if st.session_state.yaral_rules and not events_df.empty:
+                st.divider()
+                st.subheader("Recent YARAL Matches")
+                
+                all_matches = apply_yaral_rules(events_df.to_dict('records'), st.session_state.yaral_rules)
+                
+                if all_matches:
+                    # Convert to DataFrame for display
+                    matches_data = []
+                    for match in all_matches[:50]:  # Show last 50 matches
+                        matches_data.append({
+                            'Timestamp': match['timestamp'],
+                            'Rule': match['rule_name'],
+                            'Severity': match['rule_severity'],
+                            'Source IP': match['event'].get('source.ip', 'N/A'),
+                            'Event Action': match['event'].get('event.action', 'N/A'),
+                            'Description': match['rule_description']
+                        })
+                    
+                    matches_df = pd.DataFrame(matches_data)
+                    st.dataframe(matches_df.sort_values('Timestamp', ascending=False), use_container_width=True, height=400)
+                    
+                    # Export matches
+                    if st.button("📥 Export YARAL Matches"):
+                        matches_json = json.dumps(all_matches, indent=2, default=str)
+                        st.download_button(
+                            label="Download Matches JSON",
+                            data=matches_json,
+                            file_name=f"yaral_matches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                        )
+                else:
+                    st.info("No events match the current YARAL rules.")
 
 if __name__ == "__main__":
     main()
