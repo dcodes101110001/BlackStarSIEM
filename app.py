@@ -1038,23 +1038,22 @@ def main():
                     
                     # Export YARA rules
                     st.divider()
-                    if st.button("📥 Export All YARA Rules"):
-                        rules_export = []
-                        for rule in st.session_state.yara_rules:
-                            rules_export.append({
-                                'name': rule['name'],
-                                'description': rule['description'],
-                                'content': rule['content'],
-                                'enabled': rule['enabled'],
-                                'created_at': rule['created_at'].isoformat()
-                            })
-                        rules_json = json.dumps(rules_export, indent=2)
-                        st.download_button(
-                            label="Download YARA Rules JSON",
-                            data=rules_json,
-                            file_name=f"yara_rules_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json"
-                        )
+                    rules_export = []
+                    for rule in st.session_state.yara_rules:
+                        rules_export.append({
+                            'name': rule['name'],
+                            'description': rule['description'],
+                            'content': rule['content'],
+                            'enabled': rule['enabled'],
+                            'created_at': rule['created_at'].isoformat()
+                        })
+                    rules_json = json.dumps(rules_export, indent=2)
+                    st.download_button(
+                        label="📥 Export All YARA Rules",
+                        data=rules_json,
+                        file_name=f"yara_rules_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
                 else:
                     st.info("No YARA rules configured. Load sample rules or add your own!")
                 
