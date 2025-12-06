@@ -1,6 +1,6 @@
 # BlackStarSIEM 🛡️
 
-A comprehensive Elastic SIEM Lab built with Streamlit for learning and experimenting with Security Information and Event Management (SIEM) concepts.
+A comprehensive Elastic SIEM Lab built with Streamlit for learning and experimenting with Security Information and Event Management (SIEM) concepts. **Now with full UDM/ECS compliance!**
 
 ## 🎯 Overview
 
@@ -11,6 +11,19 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 - Set up custom alert rules
 - Simulate security events for learning purposes
 - Connect to Elastic Cloud or use demo mode
+- **Parse and display logs in Unified Data Model (UDM) / Elastic Common Schema (ECS) format**
+
+## 🆕 UDM/ECS Compliance
+
+BlackStar SIEM now implements the **Unified Data Model (UDM)** based on Elastic Common Schema (ECS) standards:
+
+- **Standardized Event Fields**: All events include proper categorization (event.kind, event.category, event.type)
+- **Enhanced Metadata**: Events include agent, host, dataset, and module information
+- **Consistent Timestamps**: Both ISO 8601 (@timestamp) and native datetime formats
+- **Complete Source/Destination Data**: IP addresses with corresponding address fields
+- **Industry Standard**: Compatible with Elastic Stack and other SIEM tools
+
+See [UDM_SCHEMA.md](UDM_SCHEMA.md) for complete field documentation.
 
 ## ✨ Features
 
@@ -43,14 +56,14 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 - Rule management interface
 
 ### 🎯 Event Simulation
-- Generate test security events
+- Generate test security events in UDM/ECS format
 - Multiple event types:
-  - Nmap scans
-  - SSH login attempts
-  - Failed authentication
-  - Port scans
-  - File access events
-  - Process creation
+  - Nmap scans (network/info)
+  - SSH login attempts (authentication/start)
+  - Failed authentication (authentication/start)
+  - Port scans (network/connection)
+  - File access events (file/access)
+  - Process creation (process/start)
 
 ## 🚀 Getting Started
 
@@ -125,8 +138,9 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 
 ```
 BlackStarSIEM/
-├── app.py              # Main Streamlit application
+├── app.py              # Main Streamlit application with UDM/ECS support
 ├── requirements.txt    # Python dependencies
+├── UDM_SCHEMA.md      # UDM/ECS field documentation
 └── README.md          # This file
 ```
 
