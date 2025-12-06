@@ -73,7 +73,7 @@ def get_udm_event_mapping():
     return {
         'nmap_scan': {'category': 'network', 'type': 'info', 'kind': 'event', 'outcome': None},
         'ssh_login': {'category': 'authentication', 'type': 'start', 'kind': 'event', 'outcome': None},
-        'failed_login': {'category': 'authentication', 'type': 'end', 'kind': 'event', 'outcome': 'failure'},
+        'failed_login': {'category': 'authentication', 'type': 'start', 'kind': 'event', 'outcome': 'failure'},
         'port_scan': {'category': 'network', 'type': 'connection', 'kind': 'event', 'outcome': None},
         'file_access': {'category': 'file', 'type': 'access', 'kind': 'event', 'outcome': None},
         'process_creation': {'category': 'process', 'type': 'start', 'kind': 'event', 'outcome': 'success'}

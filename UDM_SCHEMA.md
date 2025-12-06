@@ -66,7 +66,7 @@ BlackStar SIEM now implements the Unified Data Model (UDM) based on Elastic Comm
 
 - **failed_login**
   - category: `authentication`
-  - type: `end`
+  - type: `start`
   - kind: `event`
   - outcome: `failure` (predetermined)
 
