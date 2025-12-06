@@ -10,6 +10,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 from elasticsearch import Elasticsearch
 import random
+import json
+from typing import Dict, List, Any
+import tempfile
+import os
+
+# Try to import YARA
+try:
+    import yara
+    YARA_AVAILABLE = True
+except ImportError:
+    YARA_AVAILABLE = False
+    st.warning("YARA is not installed. YARA scanning features will be disabled. Install with: pip install yara-python")
 
 # Page configuration
 st.set_page_config(
@@ -67,6 +79,10 @@ if 'simulated_events' not in st.session_state:
     st.session_state.simulated_events = []
 if 'alerts' not in st.session_state:
     st.session_state.alerts = []
+if 'yara_rules' not in st.session_state:
+    st.session_state.yara_rules = []
+if 'yara_matches' not in st.session_state:
+    st.session_state.yara_matches = []
 
 def connect_to_elastic(cloud_id, api_key):
     """Connect to Elastic Cloud"""
@@ -74,16 +90,196 @@ def connect_to_elastic(cloud_id, api_key):
         es = Elasticsearch(
             cloud_id=cloud_id,
             api_key=api_key,
-            request_timeout=30
+            request_timeout=30,
+            retry_on_timeout=True,
+            max_retries=3
         )
-        if es.ping():
+        # Test connection with info() call instead of ping()
+        # ping() may not work with API keys in some configurations
+        info = es.info()
+        if info:
             st.session_state.es_client = es
             st.session_state.es_connected = True
-            return True, "Successfully connected to Elastic Cloud!"
+            return True, f"Successfully connected to Elastic Cloud! (Cluster: {info.get('cluster_name', 'N/A')})"
         else:
-            return False, "Failed to ping Elastic Cloud"
+            return False, "Failed to connect to Elastic Cloud"
     except Exception as e:
         return False, f"Connection error: {str(e)}"
+
+def convert_to_udm(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert security event to Unified Data Model (UDM) format.
+    UDM provides a standardized way to represent security data.
+    """
+    udm_event = {
+        "metadata": {
+            "event_timestamp": event.get('timestamp', datetime.now()).isoformat() if isinstance(event.get('timestamp'), datetime) else event.get('timestamp'),
+            "event_type": map_event_type_to_udm(event.get('event.action', 'GENERIC_EVENT')),
+            "product_name": "BlackStar SIEM",
+            "vendor_name": "BlackStar",
+            "product_event_type": event.get('event.action', ''),
+            "severity": map_severity_to_udm(event.get('event.severity', 'low'))
+        },
+        "principal": {
+            "ip": [event.get('source.ip', '')],
+            "user": {
+                "userid": event.get('user.name', '')
+            }
+        },
+        "target": {
+            "ip": [event.get('destination.ip', '')],
+            "port": event.get('destination.port', 0)
+        },
+        "network": {
+            "session_id": f"{event.get('source.ip', '')}_{event.get('destination.ip', '')}_{event.get('timestamp', '')}",
+            "direction": "OUTBOUND"
+        },
+        "security_result": [{
+            "action": event.get('event.outcome', 'UNKNOWN'),
+            "description": event.get('message', ''),
+            "severity": map_severity_to_udm(event.get('event.severity', 'low'))
+        }],
+        "extensions": {
+            "auth": {
+                "type": "LOGIN" if 'login' in event.get('event.action', '').lower() else "UNKNOWN"
+            }
+        }
+    }
+    
+    return udm_event
+
+def map_event_type_to_udm(event_action: str) -> str:
+    """Map event action to UDM event type"""
+    event_type_mapping = {
+        'nmap_scan': 'SCAN_NETWORK',
+        'ssh_login': 'USER_LOGIN',
+        'failed_login': 'USER_LOGIN',
+        'port_scan': 'SCAN_PORT',
+        'file_access': 'FILE_READ',
+        'process_creation': 'PROCESS_LAUNCH'
+    }
+    return event_type_mapping.get(event_action, 'GENERIC_EVENT')
+
+def map_severity_to_udm(severity: str) -> str:
+    """Map severity to UDM severity"""
+    severity_mapping = {
+        'low': 'LOW',
+        'medium': 'MEDIUM',
+        'high': 'HIGH',
+        'critical': 'CRITICAL'
+    }
+    return severity_mapping.get(severity.lower(), 'INFORMATIONAL')
+
+def compile_yara_rule(rule_name: str, rule_content: str) -> tuple:
+    """
+    Compile a YARA rule and return the compiled rule or error.
+    Returns (success: bool, result: compiled_rule or error_message)
+    """
+    if not YARA_AVAILABLE:
+        return False, "YARA is not available"
+    
+    try:
+        # Create a temporary file for the rule
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', delete=False) as f:
+            f.write(rule_content)
+            temp_path = f.name
+        
+        # Compile the rule
+        compiled_rule = yara.compile(filepath=temp_path)
+        
+        # Clean up
+        os.unlink(temp_path)
+        
+        return True, compiled_rule
+    except Exception as e:
+        return False, str(e)
+
+def scan_event_with_yara(event: Dict[str, Any], compiled_rules: List) -> List[Dict[str, Any]]:
+    """
+    Scan an event with YARA rules.
+    Returns list of matches.
+    """
+    if not YARA_AVAILABLE or not compiled_rules:
+        return []
+    
+    matches = []
+    
+    # Convert event to string for scanning
+    event_str = json.dumps(event, default=str)
+    
+    for rule_info in compiled_rules:
+        try:
+            rule_matches = rule_info['compiled'].match(data=event_str)
+            if rule_matches:
+                for match in rule_matches:
+                    matches.append({
+                        'rule_name': rule_info['name'],
+                        'yara_rule': match.rule,
+                        'strings': [str(s) for s in match.strings],
+                        'event': event,
+                        'timestamp': datetime.now()
+                    })
+        except Exception as e:
+            st.error(f"Error scanning with rule {rule_info['name']}: {str(e)}")
+    
+    return matches
+
+def get_sample_yara_rules() -> List[Dict[str, str]]:
+    """Return sample YARA rules for common threats"""
+    return [
+        {
+            'name': 'Suspicious_SSH_Brute_Force',
+            'description': 'Detects potential SSH brute force attempts',
+            'content': '''rule Suspicious_SSH_Brute_Force
+{
+    meta:
+        description = "Detects SSH brute force attempts"
+        severity = "high"
+    
+    strings:
+        $ssh = "ssh_login" nocase
+        $failed = "failed_login" nocase
+        $user1 = "root" nocase
+        $user2 = "admin" nocase
+    
+    condition:
+        ($ssh or $failed) and ($user1 or $user2)
+}'''
+        },
+        {
+            'name': 'Port_Scan_Detection',
+            'description': 'Detects port scanning activity',
+            'content': '''rule Port_Scan_Detection
+{
+    meta:
+        description = "Detects port scanning activity"
+        severity = "medium"
+    
+    strings:
+        $scan1 = "port_scan" nocase
+        $scan2 = "nmap_scan" nocase
+    
+    condition:
+        $scan1 or $scan2
+}'''
+        },
+        {
+            'name': 'Critical_Event_Alert',
+            'description': 'Detects critical severity events',
+            'content': '''rule Critical_Event_Alert
+{
+    meta:
+        description = "Detects critical severity events"
+        severity = "critical"
+    
+    strings:
+        $severity = "critical" nocase
+    
+    condition:
+        $severity
+}'''
+        }
+    ]
 
 def generate_sample_events(count=100):
     """Generate sample security events for demonstration"""
@@ -105,6 +301,8 @@ def generate_sample_events(count=100):
             'event.outcome': random.choice(['success', 'failure']),
             'message': f'Security event detected: {random.choice(event_types)}'
         }
+        # Add UDM version
+        event['udm'] = convert_to_udm(event)
         events.append(event)
     
     return events
@@ -233,6 +431,8 @@ def main():
                     'event.outcome': 'success',
                     'message': f'Simulated {event_type} event'
                 }
+                # Add UDM version
+                new_event['udm'] = convert_to_udm(new_event)
                 st.session_state.simulated_events.append(new_event)
                 st.success(f"Simulated {event_type} event!")
                 st.rerun()
@@ -275,7 +475,7 @@ def main():
         
     else:
         # Main dashboard tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts", "🔬 YARA"])
         
         # Get events (from Elastic or simulated)
         if st.session_state.simulated_events:
@@ -366,14 +566,53 @@ def main():
             )
             
             # Export option
-            if st.button("📥 Export to CSV"):
-                csv = filtered_df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name=f"siem_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                if st.button("📥 Export to CSV"):
+                    csv = filtered_df.to_csv(index=False)
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name=f"siem_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            
+            with col_exp2:
+                if st.button("📋 Export UDM Format"):
+                    # Convert filtered events to UDM format
+                    udm_events = []
+                    for _, event in filtered_df.iterrows():
+                        if 'udm' in event and event['udm']:
+                            udm_events.append(event['udm'])
+                        else:
+                            udm_events.append(convert_to_udm(event.to_dict()))
+                    
+                    udm_json = json.dumps(udm_events, indent=2, default=str)
+                    st.download_button(
+                        label="Download UDM JSON",
+                        data=udm_json,
+                        file_name=f"siem_events_udm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+            
+            # UDM Viewer
+            st.divider()
+            st.subheader("🔍 UDM Format Viewer")
+            if len(filtered_df) > 0:
+                selected_event_idx = st.selectbox(
+                    "Select event to view in UDM format:",
+                    range(len(filtered_df)),
+                    format_func=lambda x: f"Event {x+1}: {filtered_df.iloc[x]['event.action']} at {filtered_df.iloc[x]['timestamp']}"
                 )
+                
+                if selected_event_idx is not None:
+                    selected_event = filtered_df.iloc[selected_event_idx]
+                    if 'udm' in selected_event and selected_event['udm']:
+                        udm_data = selected_event['udm']
+                    else:
+                        udm_data = convert_to_udm(selected_event.to_dict())
+                    
+                    st.json(udm_data)
         
         with tab3:
             # Analytics
@@ -512,6 +751,174 @@ def main():
                                 st.rerun()
             else:
                 st.info("No alert rules configured yet. Create your first rule above!")
+        
+        with tab5:
+            # YARA Rules Management
+            st.header("🔬 YARA Rule Scanner")
+            
+            if not YARA_AVAILABLE:
+                st.error("❌ YARA is not available. Please install it with: pip install yara-python")
+                st.info("YARA is a pattern matching tool used for malware identification and threat detection.")
+            else:
+                st.success("✅ YARA is available and ready to use")
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.subheader("Manage YARA Rules")
+                    
+                    # Option to load sample rules
+                    if st.button("📥 Load Sample Rules"):
+                        sample_rules = get_sample_yara_rules()
+                        for rule in sample_rules:
+                            # Check if rule already exists
+                            if not any(r['name'] == rule['name'] for r in st.session_state.yara_rules):
+                                success, result = compile_yara_rule(rule['name'], rule['content'])
+                                if success:
+                                    st.session_state.yara_rules.append({
+                                        'name': rule['name'],
+                                        'description': rule['description'],
+                                        'content': rule['content'],
+                                        'compiled': result,
+                                        'enabled': True,
+                                        'created_at': datetime.now()
+                                    })
+                        st.success(f"Loaded {len(sample_rules)} sample rules!")
+                        st.rerun()
+                    
+                    st.divider()
+                    
+                    # Add custom rule
+                    st.subheader("Add Custom YARA Rule")
+                    
+                    rule_name = st.text_input("Rule Name", placeholder="e.g., Malware_Detection")
+                    rule_description = st.text_input("Description", placeholder="Describe what this rule detects")
+                    rule_content = st.text_area(
+                        "YARA Rule Content",
+                        height=200,
+                        placeholder='''rule Example_Rule
+{
+    meta:
+        description = "Example rule"
+        severity = "high"
+    
+    strings:
+        $string1 = "malicious" nocase
+        $string2 = "suspicious" nocase
+    
+    condition:
+        $string1 or $string2
+}''')
+                    
+                    if st.button("➕ Add Rule", type="primary"):
+                        if rule_name and rule_content:
+                            # Check if rule already exists
+                            if any(r['name'] == rule_name for r in st.session_state.yara_rules):
+                                st.error(f"Rule '{rule_name}' already exists!")
+                            else:
+                                success, result = compile_yara_rule(rule_name, rule_content)
+                                if success:
+                                    st.session_state.yara_rules.append({
+                                        'name': rule_name,
+                                        'description': rule_description,
+                                        'content': rule_content,
+                                        'compiled': result,
+                                        'enabled': True,
+                                        'created_at': datetime.now()
+                                    })
+                                    st.success(f"Rule '{rule_name}' added successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed to compile rule: {result}")
+                        else:
+                            st.warning("Please provide both rule name and content")
+                
+                with col2:
+                    st.subheader("Scanner Status")
+                    st.metric("Active Rules", len([r for r in st.session_state.yara_rules if r['enabled']]))
+                    st.metric("Total Rules", len(st.session_state.yara_rules))
+                    st.metric("Matches Found", len(st.session_state.yara_matches))
+                    
+                    st.divider()
+                    
+                    # Scan events button
+                    if st.button("🔍 Scan All Events", type="primary"):
+                        if st.session_state.yara_rules:
+                            st.session_state.yara_matches = []
+                            enabled_rules = [r for r in st.session_state.yara_rules if r['enabled']]
+                            
+                            with st.spinner(f"Scanning {len(events_df)} events with {len(enabled_rules)} rules..."):
+                                for _, event in events_df.iterrows():
+                                    matches = scan_event_with_yara(event.to_dict(), enabled_rules)
+                                    st.session_state.yara_matches.extend(matches)
+                            
+                            st.success(f"Scan complete! Found {len(st.session_state.yara_matches)} matches.")
+                            st.rerun()
+                        else:
+                            st.warning("No YARA rules available. Add some rules first!")
+                
+                st.divider()
+                
+                # Display YARA rules
+                if st.session_state.yara_rules:
+                    st.subheader("Configured YARA Rules")
+                    
+                    for idx, rule in enumerate(st.session_state.yara_rules):
+                        with st.expander(f"{'✅' if rule['enabled'] else '❌'} {rule['name']}", expanded=False):
+                            col_a, col_b = st.columns([3, 1])
+                            
+                            with col_a:
+                                st.write(f"**Description:** {rule['description']}")
+                                st.write(f"**Created:** {rule['created_at'].strftime('%Y-%m-%d %H:%M')}")
+                                st.write(f"**Status:** {'Enabled' if rule['enabled'] else 'Disabled'}")
+                                
+                                with st.expander("View Rule Content"):
+                                    st.code(rule['content'], language='yara')
+                            
+                            with col_b:
+                                if st.button("🗑️ Delete", key=f"delete_yara_{idx}"):
+                                    st.session_state.yara_rules = [r for i, r in enumerate(st.session_state.yara_rules) if i != idx]
+                                    st.rerun()
+                                
+                                if rule['enabled']:
+                                    if st.button("⏸️ Disable", key=f"disable_yara_{idx}"):
+                                        st.session_state.yara_rules[idx]['enabled'] = False
+                                        st.rerun()
+                                else:
+                                    if st.button("▶️ Enable", key=f"enable_yara_{idx}"):
+                                        st.session_state.yara_rules[idx]['enabled'] = True
+                                        st.rerun()
+                else:
+                    st.info("No YARA rules configured. Load sample rules or add your own!")
+                
+                # Display matches
+                if st.session_state.yara_matches:
+                    st.divider()
+                    st.subheader("🎯 YARA Matches")
+                    
+                    matches_df = pd.DataFrame([
+                        {
+                            'Timestamp': m['timestamp'],
+                            'Rule': m['rule_name'],
+                            'YARA Rule': m['yara_rule'],
+                            'Event Type': m['event'].get('event.action', 'N/A'),
+                            'Source IP': m['event'].get('source.ip', 'N/A'),
+                            'Severity': m['event'].get('event.severity', 'N/A')
+                        }
+                        for m in st.session_state.yara_matches
+                    ])
+                    
+                    st.dataframe(matches_df, use_container_width=True, height=400)
+                    
+                    # Export matches
+                    if st.button("📥 Export Matches"):
+                        matches_json = json.dumps(st.session_state.yara_matches, indent=2, default=str)
+                        st.download_button(
+                            label="Download Matches JSON",
+                            data=matches_json,
+                            file_name=f"yara_matches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                        )
 
 if __name__ == "__main__":
     main()
