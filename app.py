@@ -21,7 +21,6 @@ try:
     YARA_AVAILABLE = True
 except ImportError:
     YARA_AVAILABLE = False
-    st.warning("YARA is not installed. YARA scanning features will be disabled. Install with: pip install yara-python")
 
 # Page configuration
 st.set_page_config(
@@ -178,6 +177,7 @@ def compile_yara_rule(rule_name: str, rule_content: str) -> tuple:
     if not YARA_AVAILABLE:
         return False, "YARA is not available"
     
+    temp_path = None
     try:
         # Create a temporary file for the rule
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', delete=False) as f:
@@ -187,12 +187,16 @@ def compile_yara_rule(rule_name: str, rule_content: str) -> tuple:
         # Compile the rule
         compiled_rule = yara.compile(filepath=temp_path)
         
-        # Clean up
-        os.unlink(temp_path)
-        
         return True, compiled_rule
     except Exception as e:
         return False, str(e)
+    finally:
+        # Ensure cleanup happens even if an exception occurs
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass  # Ignore cleanup errors
 
 def scan_event_with_yara(event: Dict[str, Any], compiled_rules: List) -> List[Dict[str, Any]]:
     """
@@ -204,8 +208,20 @@ def scan_event_with_yara(event: Dict[str, Any], compiled_rules: List) -> List[Di
     
     matches = []
     
-    # Convert event to string for scanning
-    event_str = json.dumps(event, default=str)
+    # Extract relevant fields for scanning to avoid false positives from JSON structure
+    # Focus on meaningful security-related fields
+    scannable_fields = {
+        'event_action': event.get('event.action', ''),
+        'message': event.get('message', ''),
+        'user': event.get('user.name', ''),
+        'source_ip': event.get('source.ip', ''),
+        'destination_ip': event.get('destination.ip', ''),
+        'outcome': event.get('event.outcome', ''),
+        'severity': event.get('event.severity', '')
+    }
+    
+    # Create a structured string for scanning
+    event_str = ' '.join(f"{k}:{v}" for k, v in scannable_fields.items() if v)
     
     for rule_info in compiled_rules:
         try:

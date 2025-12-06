@@ -52,6 +52,22 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
   - File access events
   - Process creation
 
+### 📋 UDM (Unified Data Model) Support
+- Convert security events to standardized UDM format
+- View events in UDM structure
+- Export events as UDM JSON
+- Compatible with Google Chronicle and other SIEM platforms
+- Standardized event taxonomy and severity mapping
+
+### 🔬 YARA Rule Scanner
+- Pattern matching for threat detection
+- Pre-loaded sample rules for common threats
+- Custom YARA rule creation
+- Real-time event scanning
+- Match detection and reporting
+- Export YARA matches
+- Enable/disable rules individually
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -87,9 +103,10 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
 
 1. Launch the application
 2. Click **"Use Demo Mode"** in the sidebar
-3. Explore pre-generated sample events
+3. Explore pre-generated sample events with UDM formatting
 4. Create visualizations and alerts
 5. Simulate security events
+6. Scan events with YARA rules
 
 ### Connecting to Elastic Cloud
 
@@ -121,6 +138,26 @@ BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn
    - Click **Simulate Event**
 3. View the new event in the dashboard and logs
 
+### Using UDM (Unified Data Model)
+
+1. Navigate to the **Events** tab
+2. View events in standard format
+3. Scroll to the **UDM Format Viewer** section
+4. Select an event to view its UDM representation
+5. Export events in UDM JSON format for integration with other SIEM platforms
+
+### YARA Rule Scanning
+
+1. Navigate to the **YARA** tab
+2. Click **Load Sample Rules** to get started with pre-configured rules
+3. Or create custom rules:
+   - Enter a rule name and description
+   - Write your YARA rule content
+   - Click **Add Rule**
+4. Click **Scan All Events** to detect patterns
+5. View matches and export results
+6. Enable/disable rules as needed
+
 ## 📁 Project Structure
 
 ```
@@ -136,6 +173,7 @@ BlackStarSIEM/
 - **Pandas** - Data manipulation and analysis
 - **Plotly** - Interactive visualizations
 - **Elasticsearch** - Search and analytics engine
+- **YARA** - Pattern matching and malware detection
 - **Python** - Programming language
 
 ## 📚 Learning Resources
@@ -202,6 +240,9 @@ For questions, issues, or suggestions:
 
 ## 🌟 Features Roadmap
 
+- [x] UDM (Unified Data Model) support
+- [x] YARA rule scanning and detection
+- [x] Improved Elasticsearch connectivity
 - [ ] Advanced query builder
 - [ ] Custom dashboard creation
 - [ ] Multi-user support
