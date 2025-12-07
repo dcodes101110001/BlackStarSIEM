@@ -175,15 +175,20 @@ See [UDM_SCHEMA.md](UDM_SCHEMA.md) for complete field documentation.
 7. Import/Export rulesets from Git repositories or files
 8. Test rules using the simulator before deploying
 
+**For detailed YARAL documentation, see [YARAL_GUIDE.md](YARAL_GUIDE.md)**
+
 ## 📁 Project Structure
 
 ```
 BlackStarSIEM/
-├── app.py              # Main Streamlit application with UDM/ECS support
-├── yaral_engine.py     # YARAL rule engine for security detection
-├── requirements.txt    # Python dependencies
-├── UDM_SCHEMA.md      # UDM/ECS field documentation
-└── README.md          # This file
+├── app.py                    # Main Streamlit application with UDM/ECS support
+├── yaral_engine.py           # YARAL rule engine for security detection
+├── requirements.txt          # Python dependencies
+├── UDM_SCHEMA.md            # UDM/ECS field documentation
+├── YARAL_GUIDE.md           # Complete YARAL rule format guide
+├── IMPLEMENTATION_SUMMARY.md # Overview of YARAL implementation
+├── sample_rules.yaral        # Example YARAL rules
+└── README.md                # This file
 ```
 
 ## 🛠️ Technologies Used
