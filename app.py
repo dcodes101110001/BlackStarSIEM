@@ -834,7 +834,7 @@ def main():
                         if submit_button:
                             if rule_name and rule_conditions:
                                 try:
-                                    # Parse conditions
+                                    # Parse conditions with better error reporting
                                     conditions = json.loads(rule_conditions)
                                     
                                     # Create rule dict
@@ -866,7 +866,16 @@ def main():
                                                 st.error("Failed to add rule")
                                 
                                 except json.JSONDecodeError as e:
-                                    st.error(f"Invalid JSON in conditions: {str(e)}")
+                                    # Provide detailed error information
+                                    error_msg = f"Invalid JSON in conditions:\n"
+                                    error_msg += f"- Error: {e.msg}\n"
+                                    if hasattr(e, 'lineno') and hasattr(e, 'colno'):
+                                        error_msg += f"- Location: Line {e.lineno}, Column {e.colno}\n"
+                                    error_msg += f"\nPlease check your JSON syntax. Common issues:\n"
+                                    error_msg += f"- Missing quotes around strings\n"
+                                    error_msg += f"- Missing commas between fields\n"
+                                    error_msg += f"- Unbalanced brackets or braces"
+                                    st.error(error_msg)
                                 except Exception as e:
                                     st.error(f"Error adding rule: {str(e)}")
                             else:

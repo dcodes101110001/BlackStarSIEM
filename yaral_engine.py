@@ -10,6 +10,11 @@ from datetime import datetime
 import os
 import tempfile
 import subprocess
+import shutil
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class YARALRule:
@@ -150,7 +155,7 @@ class YARALEngine:
             self.rules.append(rule)
             return True
         except Exception as e:
-            print(f"Error adding rule: {e}")
+            logger.error(f"Error adding rule: {e}")
             return False
     
     def remove_rule(self, rule_name: str) -> bool:
@@ -234,13 +239,32 @@ class YARALEngine:
         temp_dir = None
         
         try:
+            # Validate Git URL format to prevent command injection
+            if not git_url or not isinstance(git_url, str):
+                errors.append("Invalid Git URL provided")
+                return 0, errors
+            
+            # Basic validation - ensure it looks like a valid URL
+            # Allow http://, https://, git://, and file:// protocols
+            valid_protocols = ['http://', 'https://', 'git://', 'file://']
+            if not any(git_url.startswith(proto) for proto in valid_protocols):
+                # Also allow local paths for testing
+                if not os.path.exists(git_url):
+                    errors.append("Git URL must start with http://, https://, git://, or file://")
+                    return 0, errors
+            
+            # Validate branch name to prevent injection
+            if not branch or not isinstance(branch, str) or not branch.replace('-', '').replace('_', '').replace('/', '').isalnum():
+                errors.append("Invalid branch name")
+                return 0, errors
+            
             # Create temporary directory for cloning
             temp_dir = tempfile.mkdtemp(prefix='yaral_import_')
             
-            # Clone the repository
+            # Clone the repository with proper escaping
             try:
                 subprocess.run(
-                    ['git', 'clone', '--depth', '1', '--branch', branch, git_url, temp_dir],
+                    ['git', 'clone', '--depth', '1', '--branch', branch, '--', git_url, temp_dir],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -285,7 +309,6 @@ class YARALEngine:
             # Cleanup temp directory
             if temp_dir and os.path.exists(temp_dir):
                 try:
-                    import shutil
                     shutil.rmtree(temp_dir)
                 except Exception:
                     pass
