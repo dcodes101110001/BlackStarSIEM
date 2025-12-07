@@ -1,0 +1,104 @@
+[
+  {
+    "name": "SSH_Brute_Force_Detection",
+    "description": "Detects potential SSH brute force attempts with failed login from privileged accounts",
+    "severity": "high",
+    "enabled": true,
+    "conditions": {
+      "event.action": {
+        "in": ["ssh_login", "failed_login"]
+      },
+      "event.outcome": "failure",
+      "user.name": {
+        "in": ["root", "admin", "administrator"]
+      }
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "mitre_attack": "T1110.001",
+      "description": "Detects failed authentication attempts to privileged accounts, which may indicate brute force attack"
+    }
+  },
+  {
+    "name": "Port_Scan_Activity",
+    "description": "Detects port scanning activity in the network",
+    "severity": "medium",
+    "enabled": true,
+    "conditions": {
+      "event.action": {
+        "in": ["port_scan", "nmap_scan"]
+      },
+      "event.category": "network"
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "mitre_attack": "T1046",
+      "description": "Network reconnaissance activity that may indicate attacker enumeration"
+    }
+  },
+  {
+    "name": "Critical_Event_Alert",
+    "description": "Alert on any critical severity event",
+    "severity": "critical",
+    "enabled": true,
+    "conditions": {
+      "event.severity": "critical"
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "description": "Catch-all rule for critical severity events requiring immediate attention"
+    }
+  },
+  {
+    "name": "Failed_Authentication_Multiple_Users",
+    "description": "Detects failed authentication attempts that could indicate password spraying",
+    "severity": "high",
+    "enabled": true,
+    "conditions": {
+      "event.category": "authentication",
+      "event.outcome": "failure"
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "mitre_attack": "T1110",
+      "description": "Generic failed authentication detection for potential credential attacks"
+    }
+  },
+  {
+    "name": "Suspicious_File_Access",
+    "description": "Detects access to potentially sensitive files",
+    "severity": "medium",
+    "enabled": true,
+    "conditions": {
+      "event.action": "file_access",
+      "event.category": "file"
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "mitre_attack": "T1005",
+      "description": "File access events that may indicate data collection or exfiltration preparation"
+    }
+  },
+  {
+    "name": "Privileged_Process_Creation",
+    "description": "Detects creation of processes with potential security implications",
+    "severity": "medium",
+    "enabled": true,
+    "conditions": {
+      "event.action": "process_creation",
+      "event.category": "process",
+      "event.type": "start"
+    },
+    "metadata": {
+      "author": "BlackStar SIEM",
+      "created": "2024-01-01",
+      "mitre_attack": "T1059",
+      "description": "Process execution events that may indicate malicious activity"
+    }
+  }
+]
