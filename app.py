@@ -15,12 +15,8 @@ from typing import Dict, List, Any
 import tempfile
 import os
 
-# Try to import YARA
-try:
-    import yara
-    YARA_AVAILABLE = True
-except ImportError:
-    YARA_AVAILABLE = False
+# Import YARAL engine
+from yaral_engine import YARALEngine, YARALRule, get_sample_yaral_rules, validate_yaral_rule
 
 # Page configuration
 st.set_page_config(
@@ -78,10 +74,10 @@ if 'simulated_events' not in st.session_state:
     st.session_state.simulated_events = []
 if 'alerts' not in st.session_state:
     st.session_state.alerts = []
-if 'yara_rules' not in st.session_state:
-    st.session_state.yara_rules = []
-if 'yara_matches' not in st.session_state:
-    st.session_state.yara_matches = []
+if 'yaral_engine' not in st.session_state:
+    st.session_state.yaral_engine = YARALEngine()
+if 'yaral_matches' not in st.session_state:
+    st.session_state.yaral_matches = []
 
 def get_udm_event_mapping():
     """Get UDM/ECS mapping for event types"""
@@ -246,134 +242,6 @@ def map_severity_to_udm(severity: str) -> str:
         'critical': 'CRITICAL'
     }
     return severity_mapping.get(severity.lower(), 'INFORMATIONAL')
-
-def compile_yara_rule(rule_name: str, rule_content: str) -> tuple:
-    """
-    Compile a YARA rule and return the compiled rule or error.
-    Returns (success: bool, result: compiled_rule or error_message)
-    """
-    if not YARA_AVAILABLE:
-        return False, "YARA is not available"
-    
-    temp_path = None
-    try:
-        # Create a temporary file for the rule
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', delete=False) as f:
-            f.write(rule_content)
-            temp_path = f.name
-        
-        # Compile the rule
-        compiled_rule = yara.compile(filepath=temp_path)
-        
-        return True, compiled_rule
-    except Exception as e:
-        return False, str(e)
-    finally:
-        # Ensure cleanup happens even if an exception occurs
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except Exception:
-                pass  # Ignore cleanup errors
-
-def scan_event_with_yara(event: Dict[str, Any], compiled_rules: List) -> List[Dict[str, Any]]:
-    """
-    Scan an event with YARA rules.
-    Returns list of matches.
-    """
-    if not YARA_AVAILABLE or not compiled_rules:
-        return []
-    
-    matches = []
-    
-    # Extract relevant fields for scanning to avoid false positives from JSON structure
-    # Focus on meaningful security-related fields
-    scannable_fields = {
-        'event_action': event.get('event.action', ''),
-        'message': event.get('message', ''),
-        'user': event.get('user.name', ''),
-        'source_ip': event.get('source.ip', ''),
-        'destination_ip': event.get('destination.ip', ''),
-        'outcome': event.get('event.outcome', ''),
-        'severity': event.get('event.severity', '')
-    }
-    
-    # Create a structured string for scanning
-    event_str = ' '.join(f"{k}:{v}" for k, v in scannable_fields.items() if v)
-    
-    for rule_info in compiled_rules:
-        try:
-            rule_matches = rule_info['compiled'].match(data=event_str)
-            if rule_matches:
-                for match in rule_matches:
-                    matches.append({
-                        'rule_name': rule_info['name'],
-                        'yara_rule': match.rule,
-                        'strings': [str(s) for s in match.strings],
-                        'event': event,
-                        'timestamp': datetime.now()
-                    })
-        except Exception as e:
-            st.error(f"Error scanning with rule {rule_info['name']}: {str(e)}")
-    
-    return matches
-
-def get_sample_yara_rules() -> List[Dict[str, str]]:
-    """Return sample YARA rules for common threats"""
-    return [
-        {
-            'name': 'Suspicious_SSH_Brute_Force',
-            'description': 'Detects potential SSH brute force attempts',
-            'content': '''rule Suspicious_SSH_Brute_Force
-{
-    meta:
-        description = "Detects SSH brute force attempts"
-        severity = "high"
-    
-    strings:
-        $ssh = "ssh_login" nocase
-        $failed = "failed_login" nocase
-        $user1 = "root" nocase
-        $user2 = "admin" nocase
-    
-    condition:
-        ($ssh or $failed) and ($user1 or $user2)
-}'''
-        },
-        {
-            'name': 'Port_Scan_Detection',
-            'description': 'Detects port scanning activity',
-            'content': '''rule Port_Scan_Detection
-{
-    meta:
-        description = "Detects port scanning activity"
-        severity = "medium"
-    
-    strings:
-        $scan1 = "port_scan" nocase
-        $scan2 = "nmap_scan" nocase
-    
-    condition:
-        $scan1 or $scan2
-}'''
-        },
-        {
-            'name': 'Critical_Event_Alert',
-            'description': 'Detects critical severity events',
-            'content': '''rule Critical_Event_Alert
-{
-    meta:
-        description = "Detects critical severity events"
-        severity = "critical"
-    
-    strings:
-        $severity = "critical" nocase
-    
-    condition:
-        $severity
-}'''
-        }
-    ]
 
 def generate_sample_events(count=100):
     """Generate sample security events in UDM/ECS format for demonstration"""
@@ -622,7 +490,7 @@ def main():
         
     else:
         # Main dashboard tabs
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts", "🔬 YARA"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔍 Events", "📈 Analytics", "🚨 Alerts", "🔬 YARAL"])
         
         # Get events (from Elastic or simulated)
         if st.session_state.simulated_events:
@@ -900,191 +768,561 @@ def main():
                 st.info("No alert rules configured yet. Create your first rule above!")
         
         with tab5:
-            # YARA Rules Management
-            st.header("🔬 YARA Rule Scanner")
+            # YARAL Rules Management
+            st.header("🔬 YARAL Rule Manager")
+            st.info("YARAL (Yet Another Rule Alert Language) - A flexible, JSON-based rule engine for security event detection")
             
-            if not YARA_AVAILABLE:
-                st.error("❌ YARA is not available. Please install it with: pip install yara-python")
-                st.info("YARA is a pattern matching tool used for malware identification and threat detection.")
-            else:
-                st.success("✅ YARA is available and ready to use")
+            # Create subtabs for better organization
+            yaral_tab1, yaral_tab2, yaral_tab3, yaral_tab4 = st.tabs(["📝 Rules", "🔍 Scanner", "📥 Import/Export", "🧪 Simulator"])
+            
+            with yaral_tab1:
+                # Rule Management
+                st.subheader("Manage YARAL Rules")
                 
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
-                    st.subheader("Manage YARA Rules")
-                    
-                    # Option to load sample rules
+                    # Load sample rules
                     if st.button("📥 Load Sample Rules"):
-                        sample_rules = get_sample_yara_rules()
+                        sample_rules = get_sample_yaral_rules()
+                        count = 0
                         for rule in sample_rules:
                             # Check if rule already exists
-                            if not any(r['name'] == rule['name'] for r in st.session_state.yara_rules):
-                                success, result = compile_yara_rule(rule['name'], rule['content'])
-                                if success:
-                                    st.session_state.yara_rules.append({
-                                        'name': rule['name'],
-                                        'description': rule['description'],
-                                        'content': rule['content'],
-                                        'compiled': result,
-                                        'enabled': True,
-                                        'created_at': datetime.now()
-                                    })
-                        st.success(f"Loaded {len(sample_rules)} sample rules!")
+                            existing = st.session_state.yaral_engine.get_rule(rule['name'])
+                            if not existing:
+                                if st.session_state.yaral_engine.add_rule(rule):
+                                    count += 1
+                        st.success(f"Loaded {count} sample rules!")
                         st.rerun()
                     
                     st.divider()
                     
                     # Add custom rule
-                    st.subheader("Add Custom YARA Rule")
+                    st.subheader("Add Custom YARAL Rule")
                     
-                    rule_name = st.text_input("Rule Name", placeholder="e.g., Malware_Detection")
-                    rule_description = st.text_input("Description", placeholder="Describe what this rule detects")
-                    rule_content = st.text_area(
-                        "YARA Rule Content",
-                        height=200,
-                        placeholder='''rule Example_Rule
-{
-    meta:
-        description = "Example rule"
-        severity = "high"
-    
-    strings:
-        $string1 = "malicious" nocase
-        $string2 = "suspicious" nocase
-    
-    condition:
-        $string1 or $string2
-}''')
-                    
-                    if st.button("➕ Add Rule", type="primary"):
-                        if rule_name and rule_content:
-                            # Check if rule already exists
-                            if any(r['name'] == rule_name for r in st.session_state.yara_rules):
-                                st.error(f"Rule '{rule_name}' already exists!")
-                            else:
-                                success, result = compile_yara_rule(rule_name, rule_content)
-                                if success:
-                                    st.session_state.yara_rules.append({
+                    with st.form("add_yaral_rule"):
+                        rule_name = st.text_input("Rule Name*", placeholder="e.g., Suspicious_Login_Activity")
+                        rule_description = st.text_area("Description", placeholder="Describe what this rule detects")
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            rule_severity = st.selectbox("Severity", ['low', 'medium', 'high', 'critical'])
+                        with col_b:
+                            rule_enabled = st.checkbox("Enabled", value=True)
+                        
+                        st.markdown("**Conditions** (JSON format)")
+                        st.markdown("""
+                        Example conditions:
+                        ```json
+                        {
+                          "event.action": "ssh_login",
+                          "event.outcome": "failure",
+                          "user.name": {"in": ["root", "admin"]}
+                        }
+                        ```
+                        Supported operators: `eq`, `ne`, `in`, `contains`, `regex`, `gt`, `lt`
+                        """)
+                        
+                        rule_conditions = st.text_area(
+                            "Conditions (JSON)*",
+                            height=150,
+                            placeholder='{"event.action": "failed_login", "event.severity": "high"}'
+                        )
+                        
+                        submit_button = st.form_submit_button("➕ Add Rule", type="primary")
+                        
+                        if submit_button:
+                            if rule_name and rule_conditions:
+                                try:
+                                    # Parse conditions with better error reporting
+                                    conditions = json.loads(rule_conditions)
+                                    
+                                    # Create rule dict
+                                    new_rule = {
                                         'name': rule_name,
                                         'description': rule_description,
-                                        'content': rule_content,
-                                        'compiled': result,
-                                        'enabled': True,
-                                        'created_at': datetime.now()
-                                    })
-                                    st.success(f"Rule '{rule_name}' added successfully!")
-                                    st.rerun()
-                                else:
-                                    st.error(f"Failed to compile rule: {result}")
-                        else:
-                            st.warning("Please provide both rule name and content")
+                                        'severity': rule_severity,
+                                        'enabled': rule_enabled,
+                                        'conditions': conditions,
+                                        'metadata': {
+                                            'author': 'User',
+                                            'created': datetime.now().isoformat()
+                                        }
+                                    }
+                                    
+                                    # Validate
+                                    is_valid, errors = validate_yaral_rule(new_rule)
+                                    if not is_valid:
+                                        st.error(f"Validation errors: {', '.join(errors)}")
+                                    else:
+                                        # Check if exists
+                                        if st.session_state.yaral_engine.get_rule(rule_name):
+                                            st.error(f"Rule '{rule_name}' already exists!")
+                                        else:
+                                            if st.session_state.yaral_engine.add_rule(new_rule):
+                                                st.success(f"Rule '{rule_name}' added successfully!")
+                                                st.rerun()
+                                            else:
+                                                st.error("Failed to add rule")
+                                
+                                except json.JSONDecodeError as e:
+                                    # Provide detailed error information
+                                    error_msg = f"Invalid JSON in conditions:\n"
+                                    error_msg += f"- Error: {e.msg}\n"
+                                    if hasattr(e, 'lineno') and hasattr(e, 'colno'):
+                                        error_msg += f"- Location: Line {e.lineno}, Column {e.colno}\n"
+                                    error_msg += f"\nPlease check your JSON syntax. Common issues:\n"
+                                    error_msg += f"- Missing quotes around strings\n"
+                                    error_msg += f"- Missing commas between fields\n"
+                                    error_msg += f"- Unbalanced brackets or braces"
+                                    st.error(error_msg)
+                                except Exception as e:
+                                    st.error(f"Error adding rule: {str(e)}")
+                            else:
+                                st.warning("Please provide rule name and conditions")
                 
                 with col2:
-                    st.subheader("Scanner Status")
-                    st.metric("Active Rules", len([r for r in st.session_state.yara_rules if r['enabled']]))
-                    st.metric("Total Rules", len(st.session_state.yara_rules))
-                    st.metric("Matches Found", len(st.session_state.yara_matches))
-                    
-                    st.divider()
-                    
-                    # Scan events button
-                    if st.button("🔍 Scan All Events", type="primary"):
-                        if st.session_state.yara_rules:
-                            st.session_state.yara_matches = []
-                            enabled_rules = [r for r in st.session_state.yara_rules if r['enabled']]
-                            
-                            with st.spinner(f"Scanning {len(events_df)} events with {len(enabled_rules)} rules..."):
-                                for _, event in events_df.iterrows():
-                                    matches = scan_event_with_yara(event.to_dict(), enabled_rules)
-                                    st.session_state.yara_matches.extend(matches)
-                            
-                            st.success(f"Scan complete! Found {len(st.session_state.yara_matches)} matches.")
-                            st.rerun()
-                        else:
-                            st.warning("No YARA rules available. Add some rules first!")
+                    st.subheader("Rule Statistics")
+                    all_rules = st.session_state.yaral_engine.get_all_rules()
+                    enabled_rules = [r for r in all_rules if r.get('enabled', True)]
+                    st.metric("Total Rules", len(all_rules))
+                    st.metric("Enabled Rules", len(enabled_rules))
+                    st.metric("Matches Found", len(st.session_state.yaral_matches))
                 
                 st.divider()
                 
-                # Display YARA rules
-                if st.session_state.yara_rules:
-                    st.subheader("Configured YARA Rules")
+                # Display existing rules
+                all_rules = st.session_state.yaral_engine.get_all_rules()
+                if all_rules:
+                    st.subheader("Configured YARAL Rules")
                     
-                    for idx, rule in enumerate(st.session_state.yara_rules):
-                        with st.expander(f"{'✅' if rule['enabled'] else '❌'} {rule['name']}", expanded=False):
-                            col_a, col_b = st.columns([3, 1])
+                    for idx, rule in enumerate(all_rules):
+                        status_icon = "✅" if rule.get('enabled', True) else "❌"
+                        severity_emoji = {
+                            'low': '🟢',
+                            'medium': '🟡',
+                            'high': '🟠',
+                            'critical': '🔴'
+                        }.get(rule.get('severity', 'medium'), '⚪')
+                        
+                        with st.expander(f"{status_icon} {severity_emoji} {rule['name']}", expanded=False):
+                            col_x, col_y = st.columns([3, 1])
                             
-                            with col_a:
-                                st.write(f"**Description:** {rule['description']}")
-                                st.write(f"**Created:** {rule['created_at'].strftime('%Y-%m-%d %H:%M')}")
-                                st.write(f"**Status:** {'Enabled' if rule['enabled'] else 'Disabled'}")
+                            with col_x:
+                                st.write(f"**Description:** {rule.get('description', 'N/A')}")
+                                st.write(f"**Severity:** {rule.get('severity', 'medium')}")
+                                st.write(f"**Status:** {'Enabled' if rule.get('enabled', True) else 'Disabled'}")
                                 
-                                with st.expander("View Rule Content"):
-                                    st.code(rule['content'], language='yara')
+                                st.markdown("**Conditions:**")
+                                st.json(rule.get('conditions', {}))
+                                
+                                if rule.get('metadata'):
+                                    with st.expander("Metadata"):
+                                        st.json(rule['metadata'])
                             
-                            with col_b:
-                                if st.button("🗑️ Delete", key=f"delete_yara_{idx}"):
-                                    st.session_state.yara_rules = [r for i, r in enumerate(st.session_state.yara_rules) if i != idx]
+                            with col_y:
+                                if st.button("🗑️ Delete", key=f"delete_yaral_{idx}"):
+                                    st.session_state.yaral_engine.remove_rule(rule['name'])
                                     st.rerun()
                                 
-                                if rule['enabled']:
-                                    if st.button("⏸️ Disable", key=f"disable_yara_{idx}"):
-                                        st.session_state.yara_rules[idx]['enabled'] = False
+                                current_rule = st.session_state.yaral_engine.get_rule(rule['name'])
+                                if current_rule and current_rule.enabled:
+                                    if st.button("⏸️ Disable", key=f"disable_yaral_{idx}"):
+                                        current_rule.enabled = False
                                         st.rerun()
                                 else:
-                                    if st.button("▶️ Enable", key=f"enable_yara_{idx}"):
-                                        st.session_state.yara_rules[idx]['enabled'] = True
+                                    if st.button("▶️ Enable", key=f"enable_yaral_{idx}"):
+                                        if current_rule:
+                                            current_rule.enabled = True
                                         st.rerun()
-                    
-                    # Export YARA rules
-                    st.divider()
-                    rules_export = []
-                    for rule in st.session_state.yara_rules:
-                        rules_export.append({
-                            'name': rule['name'],
-                            'description': rule['description'],
-                            'content': rule['content'],
-                            'enabled': rule['enabled'],
-                            'created_at': rule['created_at'].isoformat()
-                        })
-                    rules_json = json.dumps(rules_export, indent=2)
-                    st.download_button(
-                        label="📥 Export All YARA Rules",
-                        data=rules_json,
-                        file_name=f"yara_rules_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json"
-                    )
                 else:
-                    st.info("No YARA rules configured. Load sample rules or add your own!")
+                    st.info("No YARAL rules configured. Load sample rules or add your own!")
+            
+            with yaral_tab2:
+                # Scanner
+                st.subheader("🔍 Event Scanner")
+                st.markdown("Scan security events against YARAL rules to detect threats and anomalies")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    all_rules = st.session_state.yaral_engine.get_all_rules()
+                    enabled_count = len([r for r in all_rules if r.get('enabled', True)])
+                    st.metric("Rules Ready", enabled_count)
+                
+                with col2:
+                    st.metric("Events to Scan", len(events_df))
+                
+                with col3:
+                    st.metric("Previous Matches", len(st.session_state.yaral_matches))
+                
+                st.divider()
+                
+                if st.button("🔍 Scan All Events", type="primary", use_container_width=True):
+                    if enabled_count > 0:
+                        st.session_state.yaral_matches = []
+                        
+                        with st.spinner(f"Scanning {len(events_df)} events with {enabled_count} rules..."):
+                            for _, event in events_df.iterrows():
+                                matches = st.session_state.yaral_engine.scan_event(event.to_dict())
+                                st.session_state.yaral_matches.extend(matches)
+                        
+                        st.success(f"✅ Scan complete! Found {len(st.session_state.yaral_matches)} matches.")
+                        st.rerun()
+                    else:
+                        st.warning("No enabled YARAL rules. Please enable some rules first!")
                 
                 # Display matches
-                if st.session_state.yara_matches:
+                if st.session_state.yaral_matches:
                     st.divider()
-                    st.subheader("🎯 YARA Matches")
+                    st.subheader("🎯 Detection Results")
                     
-                    matches_df = pd.DataFrame([
-                        {
-                            'Timestamp': m['timestamp'],
-                            'Rule': m['rule_name'],
-                            'YARA Rule': m['yara_rule'],
-                            'Event Type': m['event'].get('event.action', 'N/A'),
-                            'Source IP': m['event'].get('source.ip', 'N/A'),
-                            'Severity': m['event'].get('event.severity', 'N/A')
-                        }
-                        for m in st.session_state.yara_matches
-                    ])
+                    # Summary by severity
+                    severity_counts = {}
+                    for match in st.session_state.yaral_matches:
+                        sev = match.get('severity', 'unknown')
+                        severity_counts[sev] = severity_counts.get(sev, 0) + 1
                     
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("🔴 Critical", severity_counts.get('critical', 0))
+                    with col2:
+                        st.metric("🟠 High", severity_counts.get('high', 0))
+                    with col3:
+                        st.metric("🟡 Medium", severity_counts.get('medium', 0))
+                    with col4:
+                        st.metric("🟢 Low", severity_counts.get('low', 0))
+                    
+                    st.divider()
+                    
+                    # Display matches table
+                    matches_data = []
+                    for match in st.session_state.yaral_matches:
+                        matches_data.append({
+                            'Timestamp': match.get('timestamp', datetime.now()),
+                            'Rule': match.get('rule_name', 'N/A'),
+                            'Severity': match.get('severity', 'N/A'),
+                            'Description': match.get('description', 'N/A'),
+                            'Event Type': match.get('event', {}).get('event.action', 'N/A'),
+                            'Source IP': match.get('event', {}).get('source.ip', 'N/A')
+                        })
+                    
+                    matches_df = pd.DataFrame(matches_data)
                     st.dataframe(matches_df, use_container_width=True, height=400)
                     
                     # Export matches
-                    if st.button("📥 Export Matches"):
-                        matches_json = json.dumps(st.session_state.yara_matches, indent=2, default=str)
+                    col_exp1, col_exp2 = st.columns(2)
+                    with col_exp1:
+                        if st.button("📥 Export Matches (CSV)"):
+                            csv = matches_df.to_csv(index=False)
+                            st.download_button(
+                                label="Download CSV",
+                                data=csv,
+                                file_name=f"yaral_matches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv"
+                            )
+                    
+                    with col_exp2:
+                        if st.button("📥 Export Matches (JSON)"):
+                            matches_json = json.dumps(st.session_state.yaral_matches, indent=2, default=str)
+                            st.download_button(
+                                label="Download JSON",
+                                data=matches_json,
+                                file_name=f"yaral_matches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                mime="application/json"
+                            )
+                    
+                    # Show detailed match info
+                    st.divider()
+                    st.subheader("Match Details")
+                    
+                    for idx, match in enumerate(st.session_state.yaral_matches[:10]):  # Show first 10
+                        with st.expander(f"Match {idx+1}: {match.get('rule_name')} - {match.get('severity')}"):
+                            st.write(f"**Rule:** {match.get('rule_name')}")
+                            st.write(f"**Description:** {match.get('description')}")
+                            st.write(f"**Severity:** {match.get('severity')}")
+                            st.write(f"**Timestamp:** {match.get('timestamp')}")
+                            
+                            if match.get('reasons'):
+                                st.markdown("**Match Reasons:**")
+                                for reason in match.get('reasons', []):
+                                    st.write(f"- {reason}")
+                            
+                            st.markdown("**Event Data:**")
+                            st.json(match.get('event', {}))
+                    
+                    if len(st.session_state.yaral_matches) > 10:
+                        st.info(f"Showing first 10 of {len(st.session_state.yaral_matches)} matches. Export to see all.")
+            
+            with yaral_tab3:
+                # Import/Export
+                st.subheader("📥 Import/Export Rules")
+                
+                # Export section
+                st.markdown("### Export Rules")
+                st.markdown("Export your YARAL rules to share or backup")
+                
+                all_rules = st.session_state.yaral_engine.get_all_rules()
+                
+                if all_rules:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric("Rules to Export", len(all_rules))
+                    
+                    with col2:
+                        export_format = st.selectbox("Format", [".yaral (JSON)", ".json"])
+                    
+                    if st.button("📤 Export Rules", type="primary"):
+                        rules_json = st.session_state.yaral_engine.export_rules()
+                        file_extension = "yaral" if ".yaral" in export_format else "json"
+                        
                         st.download_button(
-                            label="Download Matches JSON",
-                            data=matches_json,
-                            file_name=f"yara_matches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            label=f"Download Rules (.{file_extension})",
+                            data=rules_json,
+                            file_name=f"yaral_rules_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}",
                             mime="application/json"
                         )
+                else:
+                    st.info("No rules to export. Create some rules first!")
+                
+                st.divider()
+                
+                # Import from file
+                st.markdown("### Import from File")
+                st.markdown("Import YARAL rules from a JSON or .yaral file")
+                
+                uploaded_file = st.file_uploader("Choose a file", type=['json', 'yaral'])
+                
+                if uploaded_file is not None:
+                    try:
+                        content = uploaded_file.read().decode('utf-8')
+                        
+                        if st.button("📥 Import from File"):
+                            count, errors = st.session_state.yaral_engine.import_rules(content)
+                            
+                            if count > 0:
+                                st.success(f"Successfully imported {count} rules!")
+                            
+                            if errors:
+                                st.error("Errors during import:")
+                                for error in errors:
+                                    st.write(f"- {error}")
+                            
+                            if count > 0:
+                                st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Error reading file: {str(e)}")
+                
+                st.divider()
+                
+                # Import from Git
+                st.markdown("### Import from Git Repository")
+                st.markdown("Clone a Git repository and import all .yaral files")
+                
+                with st.form("git_import"):
+                    git_url = st.text_input(
+                        "Git Repository URL*",
+                        placeholder="https://github.com/username/yaral-rules.git"
+                    )
+                    
+                    git_branch = st.text_input(
+                        "Branch",
+                        value="main",
+                        placeholder="main"
+                    )
+                    
+                    st.markdown("""
+                    **Note:** The repository will be cloned and all `.yaral` files will be imported.
+                    Make sure the repository contains valid YARAL rule files.
+                    """)
+                    
+                    submit_git = st.form_submit_button("🔗 Import from Git", type="primary")
+                    
+                    if submit_git:
+                        if git_url:
+                            with st.spinner(f"Cloning repository and importing rules..."):
+                                count, errors = st.session_state.yaral_engine.import_from_git(git_url, git_branch)
+                            
+                            if count > 0:
+                                st.success(f"✅ Successfully imported {count} rules from Git repository!")
+                                st.rerun()
+                            else:
+                                st.warning("No rules were imported")
+                            
+                            if errors:
+                                st.error("Errors during import:")
+                                for error in errors:
+                                    st.write(f"- {error}")
+                        else:
+                            st.warning("Please provide a Git repository URL")
+            
+            with yaral_tab4:
+                # Simulator
+                st.subheader("🧪 Rule Simulator")
+                st.markdown("Test YARAL rules against custom or sample events to verify they work correctly")
+                
+                # Select rule to test
+                all_rules = st.session_state.yaral_engine.get_all_rules()
+                
+                if all_rules:
+                    rule_names = [r['name'] for r in all_rules]
+                    selected_rule_name = st.selectbox(
+                        "Select Rule to Test",
+                        options=rule_names,
+                        help="Choose a rule to test against events"
+                    )
+                    
+                    selected_rule = st.session_state.yaral_engine.get_rule(selected_rule_name)
+                    
+                    if selected_rule:
+                        # Show rule info
+                        with st.expander("Rule Details", expanded=True):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Name:** {selected_rule.name}")
+                                st.write(f"**Description:** {selected_rule.description}")
+                            with col2:
+                                st.write(f"**Severity:** {selected_rule.severity}")
+                                st.write(f"**Enabled:** {selected_rule.enabled}")
+                            
+                            st.markdown("**Conditions:**")
+                            st.json(selected_rule.conditions)
+                        
+                        st.divider()
+                        
+                        # Test options
+                        test_option = st.radio(
+                            "Test Against:",
+                            ["Custom Event (JSON)", "Sample Events", "All Current Events"],
+                            horizontal=True
+                        )
+                        
+                        test_results = []
+                        
+                        if test_option == "Custom Event (JSON)":
+                            st.markdown("**Provide Event Data (JSON)**")
+                            st.markdown("Example event structure:")
+                            example_event = {
+                                "event.action": "ssh_login",
+                                "event.outcome": "failure",
+                                "event.severity": "high",
+                                "event.category": "authentication",
+                                "source.ip": "192.168.1.100",
+                                "user.name": "root"
+                            }
+                            st.code(json.dumps(example_event, indent=2), language='json')
+                            
+                            custom_event_json = st.text_area(
+                                "Event JSON",
+                                height=200,
+                                placeholder=json.dumps(example_event, indent=2)
+                            )
+                            
+                            if st.button("🧪 Test Rule", type="primary"):
+                                try:
+                                    event = json.loads(custom_event_json)
+                                    matched, reasons = selected_rule.match_event(event)
+                                    
+                                    if matched:
+                                        st.success("✅ Rule MATCHED the event!")
+                                        st.markdown("**Match Reasons:**")
+                                        for reason in reasons:
+                                            st.write(f"- {reason}")
+                                    else:
+                                        st.warning("❌ Rule did NOT match the event")
+                                        st.info("The event did not satisfy all conditions of this rule")
+                                    
+                                    # Show what was checked
+                                    with st.expander("Detailed Analysis"):
+                                        st.markdown("**Conditions Checked:**")
+                                        for field, condition in selected_rule.conditions.items():
+                                            field_value = selected_rule._get_nested_value(event, field)
+                                            st.write(f"- Field: `{field}`")
+                                            st.write(f"  - Expected: `{condition}`")
+                                            st.write(f"  - Found: `{field_value}`")
+                                            st.write(f"  - Match: {selected_rule._check_condition(event, field, condition)}")
+                                
+                                except json.JSONDecodeError as e:
+                                    st.error(f"Invalid JSON: {str(e)}")
+                                except Exception as e:
+                                    st.error(f"Error testing rule: {str(e)}")
+                        
+                        elif test_option == "Sample Events":
+                            # Generate a few sample events
+                            sample_events = generate_sample_events(10)
+                            
+                            if st.button("🧪 Test Against Samples", type="primary"):
+                                matches = 0
+                                for event in sample_events:
+                                    matched, reasons = selected_rule.match_event(event)
+                                    if matched:
+                                        matches += 1
+                                        test_results.append({
+                                            'event': event,
+                                            'reasons': reasons
+                                        })
+                                
+                                st.info(f"Tested against {len(sample_events)} sample events")
+                                
+                                if matches > 0:
+                                    st.success(f"✅ Rule matched {matches} out of {len(sample_events)} events")
+                                    
+                                    # Show matches
+                                    for idx, result in enumerate(test_results[:5]):  # Show first 5
+                                        with st.expander(f"Match {idx+1}"):
+                                            st.markdown("**Reasons:**")
+                                            for reason in result['reasons']:
+                                                st.write(f"- {reason}")
+                                            st.markdown("**Event:**")
+                                            st.json(result['event'])
+                                    
+                                    if len(test_results) > 5:
+                                        st.info(f"Showing first 5 of {len(test_results)} matches")
+                                else:
+                                    st.warning("❌ Rule did not match any sample events")
+                        
+                        elif test_option == "All Current Events":
+                            if st.button("🧪 Test Against All Events", type="primary"):
+                                matches = 0
+                                for _, event in events_df.iterrows():
+                                    matched, reasons = selected_rule.match_event(event.to_dict())
+                                    if matched:
+                                        matches += 1
+                                        test_results.append({
+                                            'event': event.to_dict(),
+                                            'reasons': reasons
+                                        })
+                                
+                                st.info(f"Tested against {len(events_df)} current events")
+                                
+                                if matches > 0:
+                                    st.success(f"✅ Rule matched {matches} out of {len(events_df)} events")
+                                    
+                                    # Show matches
+                                    for idx, result in enumerate(test_results[:5]):  # Show first 5
+                                        with st.expander(f"Match {idx+1}"):
+                                            st.markdown("**Reasons:**")
+                                            for reason in result['reasons']:
+                                                st.write(f"- {reason}")
+                                            st.markdown("**Event:**")
+                                            st.json(result['event'])
+                                    
+                                    if len(test_results) > 5:
+                                        st.info(f"Showing first 5 of {len(test_results)} matches")
+                                else:
+                                    st.warning("❌ Rule did not match any current events")
+                
+                else:
+                    st.info("No rules available to test. Create some rules first!")
+                    
+                    if st.button("Load Sample Rules"):
+                        sample_rules = get_sample_yaral_rules()
+                        for rule in sample_rules:
+                            st.session_state.yaral_engine.add_rule(rule)
+                        st.success(f"Loaded {len(sample_rules)} sample rules!")
+                        st.rerun()
 
 if __name__ == "__main__":
     main()

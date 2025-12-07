@@ -72,14 +72,16 @@ See [UDM_SCHEMA.md](UDM_SCHEMA.md) for complete field documentation.
 - Compatible with Google Chronicle and other SIEM platforms
 - Standardized event taxonomy and severity mapping
 
-### 🔬 YARA Rule Scanner
-- Pattern matching for threat detection
-- Pre-loaded sample rules for common threats
-- Custom YARA rule creation
-- Real-time event scanning
-- Match detection and reporting
-- Export YARA matches
+### 🔬 YARAL Rule Engine
+- Flexible JSON-based rule engine for threat detection
+- Pre-loaded sample rules for common security threats
+- Custom YARAL rule creation with intuitive JSON syntax
+- Real-time event scanning against rule conditions
+- Match detection with detailed reason reporting
+- Import/Export rulesets from files or Git repositories
+- Rule simulation and testing against custom or sample events
 - Enable/disable rules individually
+- Support for complex conditions (regex, contains, in, gt, lt, eq, ne)
 
 ## 🚀 Getting Started
 
@@ -119,7 +121,7 @@ See [UDM_SCHEMA.md](UDM_SCHEMA.md) for complete field documentation.
 3. Explore pre-generated sample events with UDM formatting
 4. Create visualizations and alerts
 5. Simulate security events
-6. Scan events with YARA rules
+6. Scan events with YARAL rules
 
 ### Connecting to Elastic Cloud
 
@@ -159,26 +161,34 @@ See [UDM_SCHEMA.md](UDM_SCHEMA.md) for complete field documentation.
 4. Select an event to view its UDM representation
 5. Export events in UDM JSON format for integration with other SIEM platforms
 
-### YARA Rule Scanning
+### YARAL Rule Scanning
 
-1. Navigate to the **YARA** tab
+1. Navigate to the **YARAL** tab
 2. Click **Load Sample Rules** to get started with pre-configured rules
 3. Or create custom rules:
    - Enter a rule name and description
-   - Write your YARA rule content
+   - Define conditions in JSON format
    - Click **Add Rule**
 4. Click **Scan All Events** to detect patterns
 5. View matches and export results
 6. Enable/disable rules as needed
+7. Import/Export rulesets from Git repositories or files
+8. Test rules using the simulator before deploying
+
+**For detailed YARAL documentation, see [YARAL_GUIDE.md](YARAL_GUIDE.md)**
 
 ## 📁 Project Structure
 
 ```
 BlackStarSIEM/
-├── app.py              # Main Streamlit application with UDM/ECS support
-├── requirements.txt    # Python dependencies
-├── UDM_SCHEMA.md      # UDM/ECS field documentation
-└── README.md          # This file
+├── app.py                    # Main Streamlit application with UDM/ECS support
+├── yaral_engine.py           # YARAL rule engine for security detection
+├── requirements.txt          # Python dependencies
+├── UDM_SCHEMA.md            # UDM/ECS field documentation
+├── YARAL_GUIDE.md           # Complete YARAL rule format guide
+├── IMPLEMENTATION_SUMMARY.md # Overview of YARAL implementation
+├── sample_rules.yaral        # Example YARAL rules
+└── README.md                # This file
 ```
 
 ## 🛠️ Technologies Used
@@ -187,7 +197,7 @@ BlackStarSIEM/
 - **Pandas** - Data manipulation and analysis
 - **Plotly** - Interactive visualizations
 - **Elasticsearch** - Search and analytics engine
-- **YARA** - Pattern matching and malware detection
+- **YARAL** - Custom JSON-based rule engine for security detection
 - **Python** - Programming language
 
 ## 📚 Learning Resources
@@ -255,7 +265,9 @@ For questions, issues, or suggestions:
 ## 🌟 Features Roadmap
 
 - [x] UDM (Unified Data Model) support
-- [x] YARA rule scanning and detection
+- [x] YARAL rule engine for detection
+- [x] Rule import/export from Git repositories
+- [x] Rule simulation and testing
 - [x] Improved Elasticsearch connectivity
 - [ ] Advanced query builder
 - [ ] Custom dashboard creation
