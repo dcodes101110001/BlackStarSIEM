@@ -395,9 +395,9 @@ class CorrelationEngine:
                     break
 
             if found is None:
-                # For THEN operators this breaks the chain
+                # For THEN / AND operators this breaks the chain; first step is always mandatory
                 op = step.operator
-                if op == CorrelationOperator.THEN or step is steps[0]:
+                if step is steps[0] or op in (CorrelationOperator.THEN, CorrelationOperator.AND):
                     return None
                 # OR step – allowed to be missing
             else:
