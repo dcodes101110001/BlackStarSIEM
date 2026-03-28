@@ -1164,10 +1164,16 @@ def _tab_correlation_rules() -> None:
                     if selected_label != "(none)":
                         # Recover rule_id from display label
                         r_id = rule_id_list[rule_label_list.index(selected_label)]
+                        # Default the stage label to the underlying rule name (part after " – "),
+                        # falling back to the full selected_label if no delimiter is present.
+                        if " – " in selected_label:
+                            default_label = selected_label.split(" – ", 1)[1]
+                        else:
+                            default_label = selected_label
                         stage_entries.append(
                             CorrelationStage(
                                 rule_id=r_id,
-                                label=stage_label or selected_label.split(" – ")[0],
+                                label=stage_label or default_label,
                                 negate=negate,
                             )
                         )
