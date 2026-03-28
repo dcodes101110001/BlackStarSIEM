@@ -137,6 +137,11 @@ class CorrelationRule:
                     "rule_id": s.rule_id,
                     "label": s.label,
                     "operator": s.operator.value,
+                    **(
+                        {"custom_condition": getattr(s, "custom_condition", None)}
+                        if getattr(s, "custom_condition", None) is not None
+                        else {}
+                    ),
                 }
                 for s in self.steps
             ],
