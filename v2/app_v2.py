@@ -609,15 +609,25 @@ def _tab_detections() -> None:
     with st.expander("🔍 Filters & Sorting", expanded=True):
         f1, f2, f3, f4 = st.columns(4)
         with f1:
-            all_sevs = ["All"] + sorted(det_df["severity"].dropna().unique().tolist())
+            sev_values = [
+                v for v in det_df["severity"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_sevs = ["All"] + sorted(sev_values)
             sel_sev = st.selectbox("Severity", all_sevs, key="alert_sev_filter")
         with f2:
-            all_tactics = ["All"] + sorted(
-                det_df["mitre_tactic"].dropna().unique().tolist()
-            )
+            tactic_values = [
+                v for v in det_df["mitre_tactic"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_tactics = ["All"] + sorted(tactic_values)
             sel_tactic = st.selectbox("MITRE Tactic", all_tactics, key="alert_tactic_filter")
         with f3:
-            all_rules = ["All"] + sorted(det_df["rule_id"].dropna().unique().tolist())
+            rule_values = [
+                v for v in det_df["rule_id"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_rules = ["All"] + sorted(rule_values)
             sel_rule = st.selectbox("Rule", all_rules, key="alert_rule_filter")
         with f4:
             min_conf = st.slider(
