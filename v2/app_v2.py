@@ -816,9 +816,13 @@ def _tab_mitre_attack() -> None:
             )
 
     # Only show tactics that have at least one covered technique
-    active_tactics = [
-        t for t in _MITRE_TACTICS_ORDER if tactic_techniques.get(t)
+    active_tactics = [t for t in _MITRE_TACTICS_ORDER if tactic_techniques.get(t)]
+    # Append any non-canonical tactics (those not in _MITRE_TACTICS_ORDER) that have techniques
+    extra_tactics = [
+        t for t in tactic_techniques
+        if t not in _MITRE_TACTICS_ORDER and tactic_techniques.get(t)
     ]
+    active_tactics.extend(extra_tactics)
 
     # Render as a Plotly heatmap grid
     if active_tactics:
