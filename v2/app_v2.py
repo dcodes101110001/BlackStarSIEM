@@ -756,16 +756,16 @@ or a custom field condition.  Steps are joined by a logical operator:
     with left:
         st.subheader("🛠️ Build a New Correlation Rule")
 
-        with st.form("corr_rule_form", clear_on_submit=False):
-            rule_name = st.text_input(
-                "Rule Name",
-                placeholder="e.g. Brute Force then Lateral Movement",
-            )
-            rule_desc = st.text_input(
-                "Description (optional)",
-                placeholder="Describe what this correlation detects",
-            )
-            st.form_submit_button("Set Rule Details ✏️", use_container_width=True)
+        # Rule details (not inside a form so values are always up to date)
+        rule_name = st.text_input(
+            "Rule Name",
+            placeholder="e.g. Brute Force then Lateral Movement",
+        )
+        rule_desc = st.text_input(
+            "Description (optional)",
+            placeholder="Describe what this correlation detects",
+        )
+        st.button("Set Rule Details ✏️", use_container_width=True, key="set_corr_rule_details")
 
         st.divider()
 
