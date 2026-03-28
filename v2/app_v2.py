@@ -49,6 +49,12 @@ from v2.ingestion.consumer import EventConsumer
 from v2.storage.writer import IcebergWriter
 from v2.processing.duckdb_analytics import DuckDBAnalytics
 from v2.rules.engine import RuleEngine
+from v2.rules.correlation import (
+    CorrelationEngine,
+    CorrelationOperator,
+    CorrelationRule,
+    CorrelationStep,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -81,6 +87,11 @@ def _init_state() -> None:
         "detections": [],
         "scan_run": False,
         "sim_batch_size": 200,
+        # Correlation rules state
+        "corr_engine": CorrelationEngine(),
+        "corr_matches": [],
+        "corr_draft_steps": [],      # steps being built for a new rule
+        "corr_next_id": 1,           # counter for auto-generated IDs
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -695,6 +706,316 @@ sev = db.severity_distribution()  # returns Pandas DataFrame
             st.code(str(list(df.columns)), language="python")
 
 
+
+# ---------------------------------------------------------------------------
+# Tab: Correlation Rules Builder
+# ---------------------------------------------------------------------------
+
+_OPERATOR_LABELS = {
+    "AND": "AND – both this and the previous step must fire",
+    "OR": "OR – either this or the previous step must fire",
+    "THEN": "THEN – this step must fire after the previous step (sequential)",
+}
+
+_SEV_COLOURS_CORR = {
+    "informational": "#28a745",
+    "low": "#17a2b8",
+    "medium": "#ffc107",
+    "high": "#fd7e14",
+    "critical": "#dc3545",
+}
+
+
+def _tab_correlation() -> None:  # noqa: C901 – long but linear UI logic
+    st.header("🔗 Correlation Rules Builder")
+
+    st.markdown(
+        """
+Build **correlation rules** by stacking individual SIEM detection rules into a
+sequential pipeline.  Each step references a predefined rule (e.g. `AUTH-001`)
+or a custom field condition.  Steps are joined by a logical operator:
+
+| Operator | Meaning |
+|----------|---------|
+| **AND** | Both rules must fire in the current detection window |
+| **OR** | At least one rule must fire |
+| **THEN** | The first rule must fire *before* the second (temporal order) |
+        """
+    )
+
+    engine: RuleEngine = st.session_state["engine"]
+    corr_engine: CorrelationEngine = st.session_state["corr_engine"]
+    detections = st.session_state.get("detections", [])
+
+    # ------------------------------------------------------------------
+    # Layout: builder on the left, saved rules + results on the right
+    # ------------------------------------------------------------------
+    left, right = st.columns([1, 1], gap="large")
+
+    # ==================== LEFT: Builder ====================
+    with left:
+        st.subheader("🛠️ Build a New Correlation Rule")
+
+        with st.form("corr_rule_form", clear_on_submit=False):
+            rule_name = st.text_input(
+                "Rule Name",
+                placeholder="e.g. Brute Force then Lateral Movement",
+            )
+            rule_desc = st.text_input(
+                "Description (optional)",
+                placeholder="Describe what this correlation detects",
+            )
+            st.form_submit_button("Set Rule Details ✏️", use_container_width=True)
+
+        st.divider()
+
+        # ---- Step builder ----
+        st.markdown("#### 📋 Add Steps")
+
+        # Collect available rule IDs from the SIEM engine
+        rules_df = engine.rules_summary()
+        predefined_ids = sorted(rules_df["rule_id"].tolist())
+        step_choices = ["CUSTOM"] + predefined_ids
+
+        # Step-choice labels for display
+        id_to_name = dict(zip(rules_df["rule_id"], rules_df["name"]))
+
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            sel_rule_id = st.selectbox(
+                "Rule ID",
+                options=step_choices,
+                format_func=lambda rid: (
+                    f"{rid} – {id_to_name[rid]}" if rid in id_to_name else rid
+                ),
+                key="step_rule_id",
+            )
+        with col_b:
+            draft_steps = st.session_state["corr_draft_steps"]
+            op_options = ["AND", "OR", "THEN"]
+            sel_op = st.selectbox(
+                "Operator (join to previous step)",
+                options=op_options,
+                disabled=len(draft_steps) == 0,
+                help="Ignored for the first step.",
+                key="step_operator",
+            )
+
+        step_label = st.text_input(
+            "Step Label (optional)",
+            placeholder="Human-readable label",
+            key="step_label",
+        )
+
+        custom_cond_str = ""
+        if sel_rule_id == "CUSTOM":
+            custom_cond_str = st.text_input(
+                "Custom condition (field=value pairs, comma-separated)",
+                placeholder='meta_action=login_failure, user_name=root',
+                help='Example: meta_action=login_failure, severity=critical',
+                key="step_custom",
+            )
+
+        col_add, col_clear = st.columns(2)
+        with col_add:
+            if st.button("➕ Add Step", use_container_width=True):
+                custom_cond = None
+                if sel_rule_id == "CUSTOM" and custom_cond_str.strip():
+                    try:
+                        custom_cond = dict(
+                            pair.strip().split("=", 1)
+                            for pair in custom_cond_str.split(",")
+                            if "=" in pair
+                        )
+                    except Exception:
+                        st.error("Invalid custom condition format. Use: key=value, key2=value2")
+                        custom_cond = None
+
+                operator = CorrelationOperator(sel_op) if draft_steps else CorrelationOperator.AND
+                label = step_label.strip() or (
+                    f"{sel_rule_id} – {id_to_name.get(sel_rule_id, '')}"
+                    if sel_rule_id != "CUSTOM"
+                    else "Custom condition"
+                )
+                step = CorrelationStep(
+                    rule_id=sel_rule_id,
+                    label=label,
+                    operator=operator,
+                    custom_condition=custom_cond,
+                )
+                st.session_state["corr_draft_steps"].append(step)
+                st.rerun()
+
+        with col_clear:
+            if st.button("🗑️ Clear Steps", use_container_width=True):
+                st.session_state["corr_draft_steps"] = []
+                st.rerun()
+
+        # ---- Preview current draft ----
+        draft_steps = st.session_state["corr_draft_steps"]
+        if draft_steps:
+            st.markdown("#### 👁️ Rule Preview")
+            for idx, step in enumerate(draft_steps):
+                op_badge = (
+                    f"**{step.operator.value}**" if idx > 0 else "*(start)*"
+                )
+                step_info = f"`{step.rule_id}`"
+                if step.custom_condition:
+                    pairs = ", ".join(f"`{k}={v}`" for k, v in step.custom_condition.items())
+                    step_info += f" where {pairs}"
+                st.markdown(
+                    f"{op_badge} → **Step {idx + 1}**: {step.label} &nbsp; {step_info}"
+                )
+
+                # Per-step remove button
+                if st.button(f"✖ Remove step {idx + 1}", key=f"rm_step_{idx}"):
+                    st.session_state["corr_draft_steps"].pop(idx)
+                    st.rerun()
+
+        st.divider()
+
+        # ---- Save rule ----
+        col_save, col_enabled = st.columns([2, 1])
+        with col_enabled:
+            enabled_toggle = st.checkbox("Enabled", value=True, key="corr_enabled")
+        with col_save:
+            if st.button("💾 Save Correlation Rule", type="primary", use_container_width=True):
+                if not rule_name.strip():
+                    st.error("Please enter a rule name.")
+                elif len(draft_steps) < 1:
+                    st.error("Add at least one step before saving.")
+                else:
+                    cid = f"CORR-{st.session_state['corr_next_id']:03d}"
+                    new_rule = CorrelationRule(
+                        correlation_id=cid,
+                        name=rule_name.strip(),
+                        description=rule_desc.strip(),
+                        steps=list(draft_steps),
+                        enabled=enabled_toggle,
+                    )
+                    corr_engine.add_rule(new_rule)
+                    st.session_state["corr_next_id"] += 1
+                    st.session_state["corr_draft_steps"] = []
+                    st.success(f"✅ Saved correlation rule **{cid}: {new_rule.name}**")
+                    st.rerun()
+
+    # ==================== RIGHT: Saved rules + results ====================
+    with right:
+        st.subheader(f"📂 Saved Correlation Rules ({len(corr_engine.rules)})")
+
+        if not corr_engine.rules:
+            st.info(
+                "No correlation rules saved yet.  "
+                "Use the builder on the left to create your first rule."
+            )
+        else:
+            for rule in corr_engine.rules:
+                exp_title = (
+                    f"{'✅' if rule.enabled else '⏸️'} "
+                    f"**{rule.correlation_id}** – {rule.name}"
+                )
+                with st.expander(exp_title, expanded=False):
+                    if rule.description:
+                        st.caption(rule.description)
+
+                    # Step table
+                    step_rows = []
+                    for idx, step in enumerate(rule.steps):
+                        op_str = step.operator.value if idx > 0 else "—"
+                        cond = ""
+                        if step.custom_condition:
+                            cond = ", ".join(f"{k}={v}" for k, v in step.custom_condition.items())
+                        step_rows.append({
+                            "Step": idx + 1,
+                            "Operator": op_str,
+                            "Rule ID": step.rule_id,
+                            "Label": step.label,
+                            "Custom Condition": cond,
+                        })
+                    st.dataframe(pd.DataFrame(step_rows), hide_index=True, use_container_width=True)
+
+                    col_en, col_del = st.columns(2)
+                    with col_en:
+                        if st.button(
+                            "Disable" if rule.enabled else "Enable",
+                            key=f"toggle_{rule.correlation_id}",
+                        ):
+                            rule.enabled = not rule.enabled
+                            st.rerun()
+                    with col_del:
+                        if st.button("🗑 Delete", key=f"del_{rule.correlation_id}"):
+                            corr_engine.remove_rule(rule.correlation_id)
+                            st.rerun()
+
+        st.divider()
+
+        # ---- Run correlation against current detections ----
+        st.subheader("▶ Run Correlation Engine")
+
+        if not detections:
+            st.info("Run the pipeline first to generate detections for correlation.")
+        elif not corr_engine.rules:
+            st.info("Create at least one correlation rule to run the engine.")
+        else:
+            det_count = len(detections)
+            rule_count = len(corr_engine.rules)
+            st.markdown(
+                f"Evaluating **{rule_count}** correlation rule(s) against "
+                f"**{det_count}** detection(s)."
+            )
+
+            if st.button("🔗 Run Correlation Rules", type="primary", use_container_width=True):
+                matches = corr_engine.evaluate(detections)
+                st.session_state["corr_matches"] = matches
+                if matches:
+                    st.success(f"⚡ {len(matches)} correlation rule(s) fired!")
+                else:
+                    st.info("No correlation rules matched the current detections.")
+                st.rerun()
+
+        # ---- Display matches ----
+        matches = st.session_state.get("corr_matches", [])
+        if matches:
+            st.subheader(f"🚨 Correlation Matches ({len(matches)})")
+            for match in matches:
+                with st.expander(
+                    f"🔗 **{match.correlation_id}** – {match.correlation_name}  "
+                    f"({len(match.matched_rule_ids)} rule(s) matched)",
+                    expanded=True,
+                ):
+                    st.markdown(
+                        f"**Matched rules:** {', '.join(f'`{r}`' for r in match.matched_rule_ids)}"
+                    )
+                    st.caption(f"Evaluated at: {match.timestamp}")
+
+                    if match.matched_detections:
+                        det_rows = [d.to_dict() for d in match.matched_detections]
+                        det_df = pd.DataFrame(det_rows)
+                        display_cols = [
+                            c for c in [
+                                "timestamp", "rule_id", "rule_name", "severity",
+                                "description", "mitre_tactic", "mitre_technique_id",
+                            ]
+                            if c in det_df.columns
+                        ]
+                        st.dataframe(
+                            det_df[display_cols],
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+
+            # Export matches
+            if st.button("⬇️ Export Correlation Matches CSV"):
+                rows = [m.to_dict() for m in matches]
+                csv = pd.DataFrame(rows).to_csv(index=False)
+                st.download_button(
+                    "Download correlation_matches.csv",
+                    data=csv,
+                    file_name="correlation_matches.csv",
+                    mime="text/csv",
+                )
+
+
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
@@ -708,13 +1029,14 @@ def main() -> None:
         "Spark/DuckDB analytics → Python SIEM rules"
     )
 
-    tab_arch, tab_events, tab_analytics, tab_rules, tab_detections, tab_spark = st.tabs([
+    tab_arch, tab_events, tab_analytics, tab_rules, tab_detections, tab_spark, tab_corr = st.tabs([
         "🏗️ Architecture",
         "📋 Events",
         "📈 Analytics",
         "🔎 Detection Rules",
         "🚨 Alerts",
         "⚡ Spark & Iceberg",
+        "🔗 Correlation Rules",
     ])
 
     with tab_arch:
@@ -729,6 +1051,8 @@ def main() -> None:
         _tab_detections()
     with tab_spark:
         _tab_spark_iceberg()
+    with tab_corr:
+        _tab_correlation()
 
 
 if __name__ == "__main__":
