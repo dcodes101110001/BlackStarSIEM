@@ -9,8 +9,6 @@ Tests cover:
   * Predefined rules loading
 """
 
-import pytest
-
 from v2.rules.base import Detection, Severity
 from v2.rules.correlation import (
     CorrelationAlert,
