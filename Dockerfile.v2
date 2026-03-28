@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for confluent-kafka (librdkafka)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        librdkafka-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for layer caching
+COPY v2/requirements_v2.txt .
+RUN pip install --no-cache-dir -r requirements_v2.txt
+
+# Copy application source
+COPY . .
+
+EXPOSE 8502
+
+CMD ["streamlit", "run", "v2/app_v2.py", "--server.port=8502", "--server.address=0.0.0.0"]
