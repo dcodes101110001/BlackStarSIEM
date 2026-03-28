@@ -1,0 +1,27 @@
+# BlackStarSIEM v2 – Python Dependencies
+# ----------------------------------------
+# Core web framework (shared with v1)
+streamlit>=1.28.0
+pandas>=2.0.0
+plotly>=5.17.0
+pyarrow>=14.0.0
+
+# ── Iceberg (Open Table Format) ────────────────────────────────────────────
+# PyIceberg with DuckDB scanner and local SQLite catalog for development.
+# For production with S3/MinIO swap the extras: pyiceberg[s3fs,glue] etc.
+pyiceberg[duckdb,sql-sqlite]>=0.7.0
+
+# ── DuckDB (lightweight analytics engine / Iceberg demo mode) ──────────────
+duckdb>=0.10.0
+
+# ── Kafka / Confluent ──────────────────────────────────────────────────────
+# confluent-kafka is the official Confluent Platform client.
+# For a pure-Python alternative (no librdkafka required) use kafka-python.
+confluent-kafka>=2.3.0
+
+# ── Apache Spark (optional – requires Java 8+) ─────────────────────────────
+# Uncomment to enable the production Spark analytics path.
+# pyspark>=3.5.0
+
+# ── Data generation / testing ──────────────────────────────────────────────
+pytest>=7.4.0
