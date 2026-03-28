@@ -1,27 +1,31 @@
-# BlackStarSIEM 🛡️
+# Advanced Usage Guide
 
-A comprehensive Elastic SIEM Lab built with Streamlit for learning and experimenting with Security Information and Event Management (SIEM) concepts. **Now with full UDM/ECS compliance!**
+## Introduction
+This guide provides detailed instructions on the advanced features of BlackStarSIEM.
 
-## 🎯 Overview
+## Architect Diagram
+![Architecture Diagram](link-to-diagram)
+A high-level overview of the system architecture is shown in the diagram above.
 
-BlackStar SIEM is an interactive learning environment inspired by [this LinkedIn article](https://www.linkedin.com/pulse/your-first-elastic-siem-lab-simple-steps-powerful-results-pathania-slwqc/). It provides a user-friendly interface to:
+## Rule-Writing
+This section covers how to write effective rules for BlackStarSIEM, including tips and best practices.
 
-- Monitor and analyze security events in real-time
-- Create interactive visualizations and dashboards
-- Set up custom alert rules
-- Simulate security events for learning purposes
-- Connect to Elastic Cloud or use demo mode
-- **Parse and display logs in Unified Data Model (UDM) / Elastic Common Schema (ECS) format**
+## Event Data Parsing
+Learn how to parse event data correctly, transforming raw events into structured data for analysis.
 
----
+## Event Model
+The event model defines how events are represented in BlackStarSIEM.
+### Event Model Example
+An example of an event would be:
+```json
+{
+  "event_id": "12345",
+  "event_type": "login",
+  "timestamp": "2026-03-28T15:54:25Z",
+  "user": "username"
+}
+```
+This model allows for easy querying and manipulation of events within the system.
 
-## BlackStarSIEM v2
-
-### Architecture
-
-Security Event Sources → Kafka → Open Table Iceberg
----
-
-Please refer New section for grace-G:
----as found such as --
- dockery-->Run with KAFKA ...Updated.
+## Conclusion
+This guide should help you leverage advanced features in BlackStarSIEM effectively.
