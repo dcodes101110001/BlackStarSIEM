@@ -1075,12 +1075,14 @@ def _tab_correlation_rules() -> None:
             if st.button(
                 "📥 Load Predefined Rules", use_container_width=True, type="secondary"
             ):
-                existing_ids = {r.rule_id for r in corr_engine.rules}
+                # Avoid duplicating by name; compute once and update as we add rules
+                existing_names = {r.name for r in corr_engine.rules}
                 for rule_data in CorrelationEngine.PREDEFINED:
                     candidate = CorrelationRule.from_dict(rule_data)
                     # Avoid duplicating by name
-                    if candidate.name not in {r.name for r in corr_engine.rules}:
+                    if candidate.name not in existing_names:
                         corr_engine.add_rule(candidate)
+                        existing_names.add(candidate.name)
                 st.success("Predefined rules loaded.")
                 st.rerun()
 
