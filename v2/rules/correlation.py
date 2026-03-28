@@ -271,11 +271,28 @@ class CorrelationEngine:
         by_rule: Dict[str, List[Any]],
     ) -> Optional[CorrelationMatch]:
         """Dispatch to the appropriate evaluation strategy."""
+        """Dispatch to the appropriate evaluation strategy."""
         # Detect whether the rule uses temporal (THEN) operators.
         uses_then = any(
             s.operator == CorrelationOperator.THEN
             for s in rule.steps[1:]
         )
+        # Detect whether the rule also uses non-temporal logical operators.
+        has_non_temporal = any(
+            s.operator in (CorrelationOperator.AND, CorrelationOperator.OR)
+            for s in rule.steps[1:]
+        )
+
+        # Mixed temporal/logical rules are not supported by the temporal
+        # evaluator and would be mis-evaluated if we silently proceeded.
+        if uses_then and has_non_temporal:
+            logger.warning(
+                "Correlation rule %s mixes THEN with AND/OR operators; "
+                "mixed temporal/logical rules are not supported and will "
+                "be ignored.",
+                getattr(rule, "correlation_id", getattr(rule, "name", "<unknown>")),
+            )
+            return None
         # Detect whether the rule also uses non-temporal logical operators.
         has_non_temporal = any(
             s.operator in (CorrelationOperator.AND, CorrelationOperator.OR)
