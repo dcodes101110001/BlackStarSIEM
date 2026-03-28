@@ -941,10 +941,14 @@ or a custom field condition.  Steps are joined by a logical operator:
                             key=f"toggle_{rule.correlation_id}",
                         ):
                             rule.enabled = not rule.enabled
+                            # Invalidate cached correlation matches when rules change
+                            st.session_state.pop("corr_matches", None)
                             st.rerun()
                     with col_del:
                         if st.button("🗑 Delete", key=f"del_{rule.correlation_id}"):
                             corr_engine.remove_rule(rule.correlation_id)
+                            # Invalidate cached correlation matches when rules change
+                            st.session_state.pop("corr_matches", None)
                             st.rerun()
 
         st.divider()
