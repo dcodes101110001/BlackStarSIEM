@@ -106,7 +106,7 @@ def _build_iceberg_schema():
 
 
 def _build_partition_spec(schema):
-    """Partition events by severity (identity) and date extracted from time."""
+    """Partition events by severity (identity)."""
     try:
         from pyiceberg.partitioning import PartitionField, PartitionSpec  # type: ignore
         from pyiceberg.transforms import IdentityTransform  # type: ignore
