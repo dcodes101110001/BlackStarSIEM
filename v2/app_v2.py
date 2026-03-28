@@ -156,10 +156,26 @@ def _run_pipeline(batch_size: int = 200) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Navigation pages (ordered list used by sidebar and main renderer)
+# ---------------------------------------------------------------------------
+
+_NAV_PAGES = [
+    ("🏗️ Architecture", "Architecture"),
+    ("📋 Events", "Events"),
+    ("📈 Analytics", "Analytics"),
+    ("🔎 Detection Rules", "Detection Rules"),
+    ("🚨 Alerts", "Alerts"),
+    ("🎯 MITRE ATT&CK", "MITRE ATT&CK"),
+    ("⚡ Spark & Iceberg", "Spark & Iceberg"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
-def _render_sidebar() -> None:
+def _render_sidebar() -> str:
+    """Render the sidebar and return the currently selected page key."""
     with st.sidebar:
         st.image(
             "https://img.shields.io/badge/BlackStarSIEM-v2-blue?style=for-the-badge",
@@ -167,6 +183,19 @@ def _render_sidebar() -> None:
         )
         st.markdown("## 🛡️ BlackStarSIEM v2")
         st.caption("Open Security Lake Architecture")
+
+        st.divider()
+        st.markdown("### 🗺️ Navigation")
+        page_labels = [label for label, _ in _NAV_PAGES]
+        selected_label = st.radio(
+            "Go to",
+            page_labels,
+            label_visibility="collapsed",
+        )
+        # Map label → key
+        selected_key = next(
+            key for label, key in _NAV_PAGES if label == selected_label
+        )
 
         st.divider()
         st.markdown("### ⚙️ Pipeline Configuration")
@@ -222,6 +251,8 @@ Security Sources
   Streamlit UI
 ```
         """)
+
+    return selected_key
 
 
 # ---------------------------------------------------------------------------
@@ -540,8 +571,17 @@ class PortScanRule(CounterRule):
 
 
 # ---------------------------------------------------------------------------
-# Tab: Detections / Alerts
+# Tab: Detections / Alerts (with filtering + sorting)
 # ---------------------------------------------------------------------------
+
+_SEV_COLOURS: Dict[str, str] = {
+    "informational": "#28a745",
+    "low": "#17a2b8",
+    "medium": "#ffc107",
+    "high": "#fd7e14",
+    "critical": "#dc3545",
+}
+
 
 def _tab_detections() -> None:
     st.header("🚨 Detections & Alerts")
@@ -554,70 +594,354 @@ def _tab_detections() -> None:
             st.info("Run the pipeline to generate detections.")
         return
 
-    # Summary metrics
-    sev_counts = {}
-    for d in detections:
-        label = d.severity.label()
-        sev_counts[label] = sev_counts.get(label, 0) + 1
+    det_df = pd.DataFrame([d.to_dict() for d in detections])
 
+    # ── Summary metrics ──────────────────────────────────────────────────────
+    sev_counts = det_df["severity"].value_counts().to_dict()
     cols = st.columns(5)
     for idx, sev in enumerate(["critical", "high", "medium", "low", "informational"]):
         with cols[idx]:
-            st.metric(
-                sev.upper(),
-                sev_counts.get(sev, 0),
-                delta=None,
-            )
+            st.metric(sev.upper(), sev_counts.get(sev, 0))
 
     st.divider()
 
-    det_df = pd.DataFrame([d.to_dict() for d in detections])
-    det_df = det_df.sort_values("severity_id", ascending=False)
+    # ── Filters ──────────────────────────────────────────────────────────────
+    with st.expander("🔍 Filters & Sorting", expanded=True):
+        f1, f2, f3, f4 = st.columns(4)
+        with f1:
+            sev_values = [
+                v for v in det_df["severity"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_sevs = ["All"] + sorted(sev_values)
+            sel_sev = st.selectbox("Severity", all_sevs, key="alert_sev_filter")
+        with f2:
+            tactic_values = [
+                v for v in det_df["mitre_tactic"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_tactics = ["All"] + sorted(tactic_values)
+            sel_tactic = st.selectbox("MITRE Tactic", all_tactics, key="alert_tactic_filter")
+        with f3:
+            rule_values = [
+                v for v in det_df["rule_id"].dropna().unique().tolist()
+                if str(v).strip()
+            ]
+            all_rules = ["All"] + sorted(rule_values)
+            sel_rule = st.selectbox("Rule", all_rules, key="alert_rule_filter")
+        with f4:
+            min_conf = st.slider(
+                "Min Confidence", 0.0, 1.0, 0.0, 0.05, key="alert_conf_filter"
+            )
 
+        s1, s2 = st.columns(2)
+        with s1:
+            sort_field = st.selectbox(
+                "Sort by",
+                ["severity_id", "timestamp", "rule_id", "mitre_tactic", "confidence"],
+                key="alert_sort_field",
+            )
+        with s2:
+            sort_asc = st.radio(
+                "Order", ["Descending", "Ascending"],
+                horizontal=True, key="alert_sort_order"
+            ) == "Ascending"
+
+    # Apply filters
+    filtered = det_df.copy()
+    if sel_sev != "All":
+        filtered = filtered[filtered["severity"] == sel_sev]
+    if sel_tactic != "All":
+        filtered = filtered[filtered["mitre_tactic"] == sel_tactic]
+    if sel_rule != "All":
+        filtered = filtered[filtered["rule_id"] == sel_rule]
+    filtered = filtered[filtered["confidence"] >= min_conf]
+
+    # Apply sort
+    filtered = filtered.sort_values(sort_field, ascending=sort_asc)
+
+    st.caption(f"Showing **{len(filtered)}** of **{len(det_df)}** detections")
+
+    # ── Table + charts ────────────────────────────────────────────────────────
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.subheader(f"Detection Log ({len(det_df)} alerts)")
+        st.subheader(f"Detection Log ({len(filtered)} alerts)")
         display_cols = [
             c for c in [
                 "timestamp", "severity", "rule_id", "rule_name",
                 "description", "mitre_tactic", "mitre_technique_id",
                 "event_message", "confidence",
             ]
-            if c in det_df.columns
+            if c in filtered.columns
         ]
-        st.dataframe(det_df[display_cols], hide_index=True, use_container_width=True)
+        st.dataframe(filtered[display_cols], hide_index=True, use_container_width=True)
+
+        csv = filtered.to_csv(index=False)
+        st.download_button(
+            "⬇️ Export Filtered Detections CSV",
+            data=csv,
+            file_name="blackstar_detections.csv",
+            mime="text/csv",
+        )
 
     with col2:
-        # Detections by rule
-        rule_counts = det_df["rule_id"].value_counts().reset_index()
+        rule_counts = filtered["rule_id"].value_counts().reset_index()
         rule_counts.columns = ["rule_id", "count"]
         fig = px.bar(rule_counts, x="count", y="rule_id", orientation="h",
                      title="Detections by Rule")
         st.plotly_chart(fig, use_container_width=True)
 
-        # Detections by severity donut
-        sev_df = det_df["severity"].value_counts().reset_index()
-        sev_df.columns = ["severity", "count"]
-        _SEV_COLOURS = {
-            "informational": "#28a745", "low": "#17a2b8",
-            "medium": "#ffc107", "high": "#fd7e14", "critical": "#dc3545",
-        }
+        sev_df2 = filtered["severity"].value_counts().reset_index()
+        sev_df2.columns = ["severity", "count"]
         fig2 = px.pie(
-            sev_df, names="severity", values="count",
+            sev_df2, names="severity", values="count",
             title="Detections by Severity",
             color="severity", color_discrete_map=_SEV_COLOURS, hole=0.4,
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    if st.button("⬇️ Export Detections CSV"):
-        csv = det_df.to_csv(index=False)
-        st.download_button(
-            "Download detections.csv",
-            data=csv,
-            file_name="blackstar_detections.csv",
-            mime="text/csv",
+
+# ---------------------------------------------------------------------------
+# Section: MITRE ATT&CK Detections Dashboard
+# ---------------------------------------------------------------------------
+
+# Enterprise ATT&CK tactics in canonical order (abridged for rules present)
+_MITRE_TACTICS_ORDER: List[str] = [
+    "Reconnaissance",
+    "Resource Development",
+    "Initial Access",
+    "Execution",
+    "Persistence",
+    "Privilege Escalation",
+    "Defense Evasion",
+    "Credential Access",
+    "Discovery",
+    "Lateral Movement",
+    "Collection",
+    "Command and Control",
+    "Exfiltration",
+    "Impact",
+]
+
+
+def _tab_mitre_attack() -> None:
+    st.header("🎯 MITRE ATT&CK Detections Dashboard")
+    st.caption(
+        "Detections from the current pipeline run mapped onto the "
+        "[MITRE ATT&CK Enterprise Matrix](https://attack.mitre.org/)."
+    )
+
+    detections = st.session_state.get("detections", [])
+    engine: RuleEngine = st.session_state["engine"]
+
+    if not detections and not st.session_state.get("scan_run"):
+        st.info("Run the pipeline first to populate the MITRE ATT&CK coverage map.")
+
+    # ── Build coverage tables ─────────────────────────────────────────────────
+    # All rules → coverage (what the engine *can* detect)
+    rules_df = engine.rules_summary()
+    all_techniques: Dict[str, Dict] = {}  # technique_id → {tactic, name, rule_ids}
+    for row in rules_df.itertuples(index=False):
+        tid = str(getattr(row, "mitre_technique_id", "") or "").strip()
+        tactic = str(getattr(row, "mitre_tactic", "") or "").strip()
+        tname = str(getattr(row, "name", "") or "").strip()
+        rid = str(getattr(row, "rule_id", "") or "").strip()
+        if tid and rid:
+            if tid not in all_techniques:
+                all_techniques[tid] = {
+                    "tactic": tactic, "technique": tname, "rule_ids": []
+                }
+            all_techniques[tid]["rule_ids"].append(rid)
+
+    # Active detections → which technique IDs fired
+    det_df: pd.DataFrame = (
+        pd.DataFrame([d.to_dict() for d in detections])
+        if detections else pd.DataFrame()
+    )
+    fired_techniques: Dict[str, int] = {}  # technique_id → count
+    if not det_df.empty and "mitre_technique_id" in det_df.columns:
+        for tid, cnt in det_df["mitre_technique_id"].value_counts().items():
+            if str(tid).strip():
+                fired_techniques[str(tid).strip()] = int(cnt)
+
+    # ── Summary coverage strip ────────────────────────────────────────────────
+    tactics_with_coverage = {
+        info["tactic"] for info in all_techniques.values() if info["tactic"]
+    }
+    tactics_with_detections = {
+        all_techniques[tid]["tactic"]
+        for tid in fired_techniques
+        if tid in all_techniques and all_techniques[tid]["tactic"]
+    }
+
+    st.subheader("📊 Coverage Summary")
+    sm1, sm2, sm3 = st.columns(3)
+    sm1.metric("Tactics Covered by Rules", len(tactics_with_coverage))
+    sm2.metric("Techniques Covered by Rules", len(all_techniques))
+    sm3.metric("Techniques with Active Detections", len(fired_techniques))
+
+    st.divider()
+
+    # ── ATT&CK Matrix heat-map ────────────────────────────────────────────────
+    st.subheader("🗺️ ATT&CK Matrix")
+    st.caption(
+        "🟦 Rule exists (covered)  │  🟥 Active detection(s)  │  ⬜ Not covered"
+    )
+
+    # Group techniques by tactic (preserve canonical tactic order)
+    tactic_techniques: Dict[str, List[Dict]] = {t: [] for t in _MITRE_TACTICS_ORDER}
+    for tid, info in all_techniques.items():
+        tactic = info["tactic"]
+        if tactic in tactic_techniques:
+            tactic_techniques[tactic].append(
+                {
+                    "tid": tid,
+                    "technique": info["technique"],
+                    "rule_ids": info["rule_ids"],
+                    "fired": fired_techniques.get(tid, 0),
+                }
+            )
+        else:
+            # Tactic not in our ordered list → add at end
+            if tactic not in tactic_techniques:
+                tactic_techniques[tactic] = []
+            tactic_techniques[tactic].append(
+                {
+                    "tid": tid,
+                    "technique": info["technique"],
+                    "rule_ids": info["rule_ids"],
+                    "fired": fired_techniques.get(tid, 0),
+                }
+            )
+
+    # Only show tactics that have at least one covered technique
+    active_tactics = [t for t in _MITRE_TACTICS_ORDER if tactic_techniques.get(t)]
+    # Append any non-canonical tactics (those not in _MITRE_TACTICS_ORDER) that have techniques
+    extra_tactics = [
+        t for t in tactic_techniques
+        if t not in _MITRE_TACTICS_ORDER and tactic_techniques.get(t)
+    ]
+    active_tactics.extend(extra_tactics)
+
+    # Render as a Plotly heatmap grid
+    if active_tactics:
+        max_rows = max(len(tactic_techniques[t]) for t in active_tactics)
+        z_vals: List[List[float]] = []
+        hover_text: List[List[str]] = []
+        annotations_list = []
+
+        for row_idx in range(max_rows):
+            z_row: List[float] = []
+            hover_row: List[str] = []
+            for col_idx, tactic in enumerate(active_tactics):
+                techs = tactic_techniques[tactic]
+                if row_idx < len(techs):
+                    tech = techs[row_idx]
+                    if tech["fired"] > 0:
+                        z_val = 2.0  # active detection
+                        cell_text = f"{tech['tid']}\n({tech['fired']} hit)"
+                    else:
+                        z_val = 1.0  # covered, no detection
+                        cell_text = tech["tid"]
+                    hover_row.append(
+                        f"<b>{tech['technique']}</b><br>"
+                        f"Technique: {tech['tid']}<br>"
+                        f"Rules: {', '.join(tech['rule_ids'])}<br>"
+                        f"Detections: {tech['fired']}"
+                    )
+                    annotations_list.append(
+                        dict(
+                            x=col_idx,
+                            y=row_idx,
+                            text=cell_text,
+                            showarrow=False,
+                            font=dict(color="white", size=9),
+                            xanchor="center",
+                            yanchor="middle",
+                        )
+                    )
+                else:
+                    z_val = 0.0  # empty cell
+                    hover_row.append("")
+                z_row.append(z_val)
+            z_vals.append(z_row)
+            hover_text.append(hover_row)
+
+        colorscale = [
+            [0.0, "#1a1a2e"],   # empty
+            [0.5, "#1565c0"],   # covered (blue)
+            [1.0, "#c62828"],   # active detection (red)
+        ]
+
+        fig_matrix = go.Figure(
+            data=go.Heatmap(
+                z=z_vals,
+                x=active_tactics,
+                colorscale=colorscale,
+                showscale=False,
+                hovertext=hover_text,
+                hovertemplate="%{hovertext}<extra></extra>",
+                xgap=2,
+                ygap=2,
+            )
         )
+        fig_matrix.update_layout(
+            height=max(300, max_rows * 36 + 80),
+            margin=dict(l=10, r=10, t=40, b=80),
+            xaxis=dict(
+                tickangle=-30,
+                tickfont=dict(size=11),
+                side="top",
+            ),
+            yaxis=dict(visible=False),
+            annotations=annotations_list,
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font=dict(color="white"),
+        )
+        st.plotly_chart(fig_matrix, use_container_width=True)
+
+    st.divider()
+
+    # ── Technique-level detail table ──────────────────────────────────────────
+    st.subheader("📋 Technique Coverage Detail")
+    detail_rows = []
+    for tid, info in all_techniques.items():
+        fired = fired_techniques.get(tid, 0)
+        detail_rows.append(
+            {
+                "Technique ID": tid,
+                "Technique": info["technique"],
+                "Tactic": info["tactic"],
+                "Rules": ", ".join(info["rule_ids"]),
+                "Detections": fired,
+                "Status": "🔴 Active" if fired > 0 else "🔵 Covered",
+            }
+        )
+    detail_df = pd.DataFrame(detail_rows).sort_values(
+        ["Detections", "Tactic"], ascending=[False, True]
+    )
+    st.dataframe(detail_df, hide_index=True, use_container_width=True)
+
+    # ── Tactic-level bar chart ────────────────────────────────────────────────
+    if not det_df.empty and "mitre_tactic" in det_df.columns:
+        st.subheader("📊 Detections by Tactic")
+        tactic_counts = (
+            det_df["mitre_tactic"]
+            .value_counts()
+            .reset_index()
+        )
+        tactic_counts.columns = ["tactic", "count"]
+        fig_tac = px.bar(
+            tactic_counts,
+            x="tactic",
+            y="count",
+            color="tactic",
+            title="Detection Count by MITRE ATT&CK Tactic",
+        )
+        fig_tac.update_layout(showlegend=False)
+        st.plotly_chart(fig_tac, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +1024,7 @@ sev = db.severity_distribution()  # returns Pandas DataFrame
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    _render_sidebar()
+    selected_page = _render_sidebar()
 
     st.title("🛡️ BlackStarSIEM v2 – Open Security Lake")
     st.caption(
@@ -708,26 +1032,19 @@ def main() -> None:
         "Spark/DuckDB analytics → Python SIEM rules"
     )
 
-    tab_arch, tab_events, tab_analytics, tab_rules, tab_detections, tab_spark = st.tabs([
-        "🏗️ Architecture",
-        "📋 Events",
-        "📈 Analytics",
-        "🔎 Detection Rules",
-        "🚨 Alerts",
-        "⚡ Spark & Iceberg",
-    ])
-
-    with tab_arch:
+    if selected_page == "Architecture":
         _tab_architecture()
-    with tab_events:
+    elif selected_page == "Events":
         _tab_events()
-    with tab_analytics:
+    elif selected_page == "Analytics":
         _tab_analytics()
-    with tab_rules:
+    elif selected_page == "Detection Rules":
         _tab_rules()
-    with tab_detections:
+    elif selected_page == "Alerts":
         _tab_detections()
-    with tab_spark:
+    elif selected_page == "MITRE ATT&CK":
+        _tab_mitre_attack()
+    elif selected_page == "Spark & Iceberg":
         _tab_spark_iceberg()
 
 
