@@ -35,7 +35,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+import copy
 import logging
+import uuid
 from typing import Dict, List
 
 import pandas as pd
@@ -49,6 +51,14 @@ from v2.ingestion.consumer import EventConsumer
 from v2.storage.writer import IcebergWriter
 from v2.processing.duckdb_analytics import DuckDBAnalytics
 from v2.rules.engine import RuleEngine
+from v2.rules.base import Severity
+from v2.rules.correlation import (
+    CorrelationEngine,
+    CorrelationRule,
+    CorrelationStage,
+    LogicOperator,
+    CorrelationSeverity,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -81,6 +91,7 @@ def _init_state() -> None:
         "detections": [],
         "scan_run": False,
         "sim_batch_size": 200,
+        "correlation_engine": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -91,6 +102,12 @@ def _init_state() -> None:
         engine = RuleEngine()
         engine.register_defaults()
         st.session_state["engine"] = engine
+
+    # Initialise correlation engine once
+    if st.session_state["correlation_engine"] is None:
+        corr_engine = CorrelationEngine()
+        corr_engine.load_predefined()
+        st.session_state["correlation_engine"] = corr_engine
 
 
 _init_state()
@@ -166,6 +183,7 @@ _NAV_PAGES = [
     ("🔎 Detection Rules", "Detection Rules"),
     ("🚨 Alerts", "Alerts"),
     ("🎯 MITRE ATT&CK", "MITRE ATT&CK"),
+    ("🔗 Correlation Rules", "Correlation Rules"),
     ("⚡ Spark & Iceberg", "Spark & Iceberg"),
 ]
 
@@ -214,7 +232,8 @@ def _render_sidebar() -> str:
 
         if st.button("🗑 Reset", use_container_width=True):
             for k in ["writer", "engine", "analytics", "mock_queue",
-                      "events_ingested", "detections", "scan_run"]:
+                      "events_ingested", "detections", "scan_run",
+                      "correlation_engine"]:
                 if k in st.session_state:
                     del st.session_state[k]
             st.rerun()
@@ -944,6 +963,367 @@ def _tab_mitre_attack() -> None:
         st.plotly_chart(fig_tac, use_container_width=True)
 
 
+
+# ---------------------------------------------------------------------------
+# Tab: Correlation Rules Builder
+# ---------------------------------------------------------------------------
+
+def _tab_correlation_rules() -> None:
+    """Interactive Correlation Rules Builder page."""
+
+    st.header("🔗 Correlation Rules Builder")
+    st.caption(
+        "Stack predefined or custom detection rules sequentially to build "
+        "compound threat-detection scenarios."
+    )
+
+    corr_engine: CorrelationEngine = st.session_state["correlation_engine"]
+    base_engine: RuleEngine = st.session_state["engine"]
+    detections = st.session_state.get("detections", [])
+
+    # Lookup table: rule_id → rule name (for display)
+    rule_options: Dict[str, str] = {
+        r.rule_id: f"{r.rule_id} – {r.name}" for r in base_engine.rules
+    }
+
+    # ── Tabs ─────────────────────────────────────────────────────────────────
+    builder_tab, results_tab, reference_tab = st.tabs(
+        ["🔨 Rule Builder", "🚨 Correlation Alerts", "📚 Rule Reference"]
+    )
+
+    # =========================================================================
+    # TAB 1 – Rule Builder
+    # =========================================================================
+    with builder_tab:
+        col_list, col_form = st.columns([2, 3], gap="large")
+
+        # ── Left column: list of existing correlation rules ───────────────────
+        with col_list:
+            st.subheader("Configured Correlation Rules")
+            rules = corr_engine.rules
+            summary = corr_engine.summary()
+            st.caption(
+                f"{summary['total_rules']} rules · "
+                f"{summary['enabled_rules']} enabled · "
+                f"{summary['disabled_rules']} disabled"
+            )
+
+            if not rules:
+                st.info(
+                    "No correlation rules configured yet. "
+                    "Use the form on the right to create one or load predefined rules."
+                )
+            else:
+                for idx, rule in enumerate(rules):
+                    sev_color = {
+                        "critical": "🔴",
+                        "high": "🟠",
+                        "medium": "🟡",
+                        "low": "🔵",
+                        "informational": "⚪",
+                    }.get(rule.severity.value, "⚪")
+
+                    op_badge = "🔀 OR" if rule.operator == LogicOperator.OR else "⛓ AND"
+                    status = "✅" if rule.enabled else "⏸"
+
+                    with st.expander(
+                        f"{status} {sev_color} {rule.name}  [{op_badge}]",
+                        expanded=False,
+                    ):
+                        st.markdown(f"**ID:** `{rule.rule_id}`")
+                        if rule.description:
+                            st.markdown(f"**Description:** {rule.description}")
+                        if rule.mitre_tactic:
+                            st.markdown(f"**MITRE Tactic:** {rule.mitre_tactic}")
+                        if rule.mitre_technique_id:
+                            st.markdown(f"**Technique ID:** `{rule.mitre_technique_id}`")
+                        if rule.tags:
+                            st.markdown(f"**Tags:** {', '.join(f'`{t}`' for t in rule.tags)}")
+
+                        st.markdown("**Stages:**")
+                        for i, stage in enumerate(rule.stages):
+                            negate_str = " *(NOT)*" if stage.negate else ""
+                            st.markdown(f"  {i + 1}. `{stage.rule_id}` – {stage.label}{negate_str}")
+
+                        bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
+                        with bcol1:
+                            if st.button("⬆", key=f"up_{rule.rule_id}", help="Move up"):
+                                corr_engine.move_rule(rule.rule_id, -1)
+                                st.rerun()
+                        with bcol2:
+                            if st.button("⬇", key=f"dn_{rule.rule_id}", help="Move down"):
+                                corr_engine.move_rule(rule.rule_id, 1)
+                                st.rerun()
+                        with bcol3:
+                            label = "Disable" if rule.enabled else "Enable"
+                            if st.button(label, key=f"tog_{rule.rule_id}"):
+                                rule.enabled = not rule.enabled
+                                st.rerun()
+                        with bcol4:
+                            if st.button("🗑 Delete", key=f"del_{rule.rule_id}"):
+                                corr_engine.remove_rule(rule.rule_id)
+                                st.rerun()
+                        with bcol5:
+                            if st.button("📋 Clone", key=f"clone_{rule.rule_id}"):
+                                cloned = copy.deepcopy(rule)
+                                cloned.rule_id = f"CORR-{uuid.uuid4().hex[:6].upper()}"
+                                cloned.name = f"{rule.name} (copy)"
+                                corr_engine.add_rule(cloned)
+                                st.rerun()
+
+            st.divider()
+            if st.button(
+                "📥 Load Predefined Rules", use_container_width=True, type="secondary"
+            ):
+                # Avoid duplicating by name; compute once and update as we add rules
+                existing_names = {r.name for r in corr_engine.rules}
+                for rule_data in CorrelationEngine.PREDEFINED:
+                    candidate = CorrelationRule.from_dict(rule_data)
+                    # Avoid duplicating by name
+                    if candidate.name not in existing_names:
+                        corr_engine.add_rule(candidate)
+                        existing_names.add(candidate.name)
+                st.success("Predefined rules loaded.")
+                st.rerun()
+
+            if st.button(
+                "🗑 Clear All Rules", use_container_width=True
+            ):
+                for r in list(corr_engine.rules):
+                    corr_engine.remove_rule(r.rule_id)
+                st.rerun()
+
+        # ── Right column: rule creation form ─────────────────────────────────
+        with col_form:
+            st.subheader("➕ Create New Correlation Rule")
+
+            with st.form("new_corr_rule", clear_on_submit=True):
+                rule_name = st.text_input(
+                    "Rule Name *",
+                    placeholder="e.g. Brute Force → Lateral Movement",
+                )
+                rule_description = st.text_area(
+                    "Description",
+                    placeholder="What threat scenario does this rule detect?",
+                    height=80,
+                )
+
+                col_sev, col_op = st.columns(2)
+                with col_sev:
+                    severity_label = st.selectbox(
+                        "Severity",
+                        options=[s.value for s in CorrelationSeverity],
+                        index=3,  # high
+                    )
+                with col_op:
+                    operator_label = st.selectbox(
+                        "Operator",
+                        options=[o.value for o in LogicOperator],
+                        index=0,  # AND
+                        help="AND – all stages must match. OR – any stage matches.",
+                    )
+
+                col_tac, col_tid = st.columns(2)
+                with col_tac:
+                    mitre_tactic = st.text_input(
+                        "MITRE Tactic", placeholder="e.g. Credential Access"
+                    )
+                with col_tid:
+                    mitre_tech_id = st.text_input(
+                        "Technique ID", placeholder="e.g. T1110"
+                    )
+
+                tags_raw = st.text_input(
+                    "Tags (comma-separated)", placeholder="e.g. ransomware, exfiltration"
+                )
+
+                st.markdown("**Stages** – add up to 8 rules in sequence:")
+
+                stage_entries = []
+                rule_id_list = list(rule_options.keys())
+                rule_label_list = list(rule_options.values())
+
+                for s_idx in range(1, 9):
+                    scol1, scol2, scol3 = st.columns([3, 3, 1])
+                    with scol1:
+                        selected_label = st.selectbox(
+                            f"Stage {s_idx} Rule",
+                            options=["(none)"] + rule_label_list,
+                            key=f"stage_rule_{s_idx}",
+                        )
+                    with scol2:
+                        stage_label = st.text_input(
+                            f"Stage {s_idx} Label",
+                            placeholder=f"Stage {s_idx}",
+                            key=f"stage_label_{s_idx}",
+                        )
+                    with scol3:
+                        negate = st.checkbox(
+                            "NOT",
+                            key=f"stage_negate_{s_idx}",
+                            help="Negate: this rule must NOT have fired",
+                        )
+                    if selected_label != "(none)":
+                        # Recover rule_id from display label
+                        r_id = rule_id_list[rule_label_list.index(selected_label)]
+                        # Default the stage label to the underlying rule name (part after " – "),
+                        # falling back to the full selected_label if no delimiter is present.
+                        if " – " in selected_label:
+                            default_label = selected_label.split(" – ", 1)[1]
+                        else:
+                            default_label = selected_label
+                        stage_entries.append(
+                            CorrelationStage(
+                                rule_id=r_id,
+                                label=stage_label or default_label,
+                                negate=negate,
+                            )
+                        )
+
+                submitted = st.form_submit_button("💾 Save Rule", type="primary")
+
+            if submitted:
+                if not rule_name.strip():
+                    st.error("Rule Name is required.")
+                elif len(stage_entries) < 1:
+                    st.error("Add at least one stage to the rule.")
+                else:
+                    tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+                    new_rule = CorrelationRule(
+                        name=rule_name.strip(),
+                        description=rule_description.strip(),
+                        stages=stage_entries,
+                        operator=LogicOperator(operator_label),
+                        severity=CorrelationSeverity(severity_label),
+                        mitre_tactic=mitre_tactic.strip(),
+                        mitre_technique_id=mitre_tech_id.strip(),
+                        tags=tags,
+                    )
+                    corr_engine.add_rule(new_rule)
+                    st.success(f"✅ Correlation rule **{rule_name}** saved!")
+                    st.rerun()
+
+    # =========================================================================
+    # TAB 2 – Correlation Alerts
+    # =========================================================================
+    with results_tab:
+        st.subheader("🚨 Correlation Alerts")
+
+        if not detections:
+            st.info(
+                "No base detections available yet. "
+                "Run the pipeline first (▶ Run Pipeline in the sidebar), "
+                "then return here to evaluate correlation rules."
+            )
+        else:
+            alerts = corr_engine.evaluate(detections)
+
+            st.caption(
+                f"Evaluated {len(corr_engine.rules)} correlation rule(s) against "
+                f"**{len(detections)}** base detection(s) → "
+                f"**{len(alerts)}** correlation alert(s) triggered."
+            )
+
+            if not alerts:
+                st.success(
+                    "✅ No correlation rules fired. "
+                    "All configured rule chains were either not matched or disabled."
+                )
+            else:
+                # Summary metrics
+                sev_counts: Dict[str, int] = {}
+                for a in alerts:
+                    label = a.severity.label()
+                    sev_counts[label] = sev_counts.get(label, 0) + 1
+
+                metric_cols = st.columns(len(sev_counts) or 1)
+                for i, (sev_label, count) in enumerate(
+                    sorted(sev_counts.items(), key=lambda x: -int(Severity.from_label(x[0])))
+                ):
+                    with metric_cols[i % len(metric_cols)]:
+                        st.metric(sev_label.capitalize(), count)
+
+                st.divider()
+
+                # Detailed alert cards
+                for alert in sorted(alerts, key=lambda a: -int(a.severity)):
+                    sev_icon = {5: "🔴", 4: "🟠", 3: "🟡", 2: "🔵", 1: "⚪"}.get(
+                        int(alert.severity), "⚪"
+                    )
+                    with st.expander(
+                        f"{sev_icon} **{alert.correlation_rule_name}** "
+                        f"[{alert.operator.value}] – {alert.severity.label().upper()}",
+                        expanded=True,
+                    ):
+                        acol1, acol2 = st.columns(2)
+                        with acol1:
+                            st.markdown(f"**Rule ID:** `{alert.correlation_rule_id}`")
+                            if alert.description:
+                                st.markdown(f"**Description:** {alert.description}")
+                            if alert.mitre_tactic:
+                                st.markdown(f"**MITRE Tactic:** {alert.mitre_tactic}")
+                            if alert.mitre_technique_id:
+                                st.markdown(
+                                    f"**Technique:** `{alert.mitre_technique_id}`"
+                                )
+                            st.markdown(f"**Timestamp:** {alert.timestamp}")
+                        with acol2:
+                            st.markdown(
+                                f"**Matched Detections:** {len(alert.matched_detections)}"
+                            )
+                            for d in alert.matched_detections[:5]:
+                                st.markdown(
+                                    f"- `{d.rule_id}` {d.rule_name} "
+                                    f"(*{d.severity.label()}*)"
+                                )
+                            if len(alert.matched_detections) > 5:
+                                st.caption(
+                                    f"… and {len(alert.matched_detections) - 5} more"
+                                )
+
+                st.divider()
+                # Exportable table
+                st.subheader("📋 Alerts Summary Table")
+                alerts_df = pd.DataFrame([a.to_dict() for a in alerts])
+                st.dataframe(alerts_df, hide_index=True, use_container_width=True)
+
+    # =========================================================================
+    # TAB 3 – Rule Reference
+    # =========================================================================
+    with reference_tab:
+        st.subheader("📚 Available Base Rules")
+        st.caption(
+            "These are the individual detection rules you can combine in correlation chains."
+        )
+        rules_df = base_engine.rules_summary()
+        if not rules_df.empty:
+            st.dataframe(
+                rules_df[["rule_id", "name", "severity", "mitre_tactic",
+                           "mitre_technique_id", "tags"]],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        st.divider()
+        st.subheader("💡 Correlation Rule Examples")
+        st.markdown("""
+| Pattern | Stages | Operator | Why it matters |
+|---------|--------|----------|----------------|
+| Account takeover | Brute Force → Priv Esc | AND | Compromise chain |
+| Recon & pivot | Port Scan → Lateral Movement | AND | Classic APT behaviour |
+| Ransomware double-extortion | Malware Stage → Exfiltration | AND | Data theft + encryption |
+| Post-exploitation | Process Injection OR LOLBin Abuse | OR | Either technique is dangerous |
+| C2 tunnel setup | C2 Beaconing + Firewall Bypass | AND | Active exfil preparation |
+
+**Tips:**
+- Use **AND** when you need to confirm a sequence of events (e.g., recon *then* attack).
+- Use **OR** when multiple techniques represent equivalent risk.
+- Use **NOT** (negate) stages to detect absence – e.g., "alert when data exfiltration occurs
+  but no prior phishing indicator was seen" (no-prior-context exfil).
+- Stack more stages to reduce false positives – each additional AND stage adds precision.
+        """)
+
+
 # ---------------------------------------------------------------------------
 # Tab: Spark / Iceberg Info
 # ---------------------------------------------------------------------------
@@ -1044,6 +1424,8 @@ def main() -> None:
         _tab_detections()
     elif selected_page == "MITRE ATT&CK":
         _tab_mitre_attack()
+    elif selected_page == "Correlation Rules":
+        _tab_correlation_rules()
     elif selected_page == "Spark & Iceberg":
         _tab_spark_iceberg()
 
