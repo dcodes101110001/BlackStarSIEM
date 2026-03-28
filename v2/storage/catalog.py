@@ -231,11 +231,10 @@ class IcebergCatalog:
     def is_live(self) -> bool:
         return self._table is not None
 
-    def scan_to_arrow(self, row_filter: str = ""):
+    def scan_to_arrow(self):
         """Scan the Iceberg table and return a PyArrow Table."""
         if not self.is_live:
             raise RuntimeError("Iceberg table not initialised")
-        from pyiceberg.expressions import AlwaysTrue  # type: ignore
 
         scanner = self._table.scan()
         return scanner.to_arrow()
