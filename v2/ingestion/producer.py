@@ -199,14 +199,15 @@ class SecurityEventSimulator:
         action, sev, msg = self._rng.choice(self._NETWORK_ACTIONS)
         src_port = self._rng.randint(1024, 65535)
         dst_port = self._rng.choice([22, 80, 443, 3389, 8080, 445, 3306, 5432])
+        src_ip = self._private_ip()
         return SecurityEvent(
             class_uid=EventClass.NETWORK_ACTIVITY,
             category_uid=4,
             activity_id=1,
             severity_id=int(sev),
             status="unknown",
-            message=f"{msg} from {self._private_ip()}:{src_port}",
-            src_endpoint=NetworkEndpoint(ip=self._private_ip(), port=src_port),
+            message=f"{msg} from {src_ip}:{src_port}",
+            src_endpoint=NetworkEndpoint(ip=src_ip, port=src_port),
             dst_endpoint=NetworkEndpoint(ip=self._ip(), port=dst_port),
             metadata={"action": action},
         )
