@@ -8,14 +8,13 @@ Two modes:
   1. **Live mode** – polls a real Kafka broker.
   2. **Mock mode** – drains a MockQueue (same dict used by EventProducer).
 
-The consumer also performs lightweight enrichment before persistence:
-  - Stamps ``kafka_topic``, ``kafka_partition``, ``kafka_offset``.
-  - Tags geographic region based on IP prefix (stub – replace with MaxMind).
-  - Normalises timestamp to UTC ISO-8601.
+The consumer also performs lightweight enrichment before persistence by
+stamping ``kafka_topic``, ``kafka_partition``, and ``kafka_offset``.
 """
 
 from __future__ import annotations
 
+from __future__ import annotations
 import json
 import logging
 import threading
