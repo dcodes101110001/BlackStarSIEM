@@ -667,14 +667,13 @@ def _tab_detections() -> None:
         ]
         st.dataframe(filtered[display_cols], hide_index=True, use_container_width=True)
 
-        if st.button("⬇️ Export Filtered Detections CSV"):
-            csv = filtered.to_csv(index=False)
-            st.download_button(
-                "Download detections.csv",
-                data=csv,
-                file_name="blackstar_detections.csv",
-                mime="text/csv",
-            )
+        csv = filtered.to_csv(index=False)
+        st.download_button(
+            "⬇️ Export Filtered Detections CSV",
+            data=csv,
+            file_name="blackstar_detections.csv",
+            mime="text/csv",
+        )
 
     with col2:
         rule_counts = filtered["rule_id"].value_counts().reset_index()
